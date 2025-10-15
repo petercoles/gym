@@ -1,0 +1,100 @@
+# Gym Booking Bot - .gitignore
+
+# Environment and secrets
+.env
+*.env
+.env.local
+.env.production
+
+# State and data files
+booking_state.json
+*.json
+!schedule.csv.template
+!.env.template
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+.env/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Operating System
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Browser data and screenshots
+screenshots/
+*.png
+*.jpg
+*.jpeg
+!gym_website_test.png
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pytest
+.pytest_cache/
+.coverage
+
+# Deployment specific
+.serverless/
+node_modules/
+
+# Personal schedule files (keep templates only)
+schedule.csv
+my_schedule.csv
+*_schedule.csv
+!schedule.csv.template
+# schedule.csv is committed - edit and redeploy to update
+
+# Test files
+test_state.json
+test_*.json

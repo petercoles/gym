@@ -1,0 +1,9 @@
+# Gym Booking Bot Requirements - Simplified Cron Job
+# Core dependencies for Playwright browser automation
+playwright>=1.40.0
+
+# Environment variable management
+python-dotenv>=1.0.0
+
+# AWS S3 support for schedule storage
+boto3>=1.34.0

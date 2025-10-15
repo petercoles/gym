@@ -1,0 +1,26 @@
+# Gym Booking Schedule
+# Copy this file to schedule.csv and customize your bookings
+# 
+# Columns:
+#   user: peter, adrienne, or lucy
+#   instructor: Instructor's first name, or "Swim(duration)" for swim bookings
+#   day_of_week: monday, tuesday, wednesday, thursday, friday, saturday, sunday
+#   time: Class/swim time in HH:MM format (e.g., 09:00, 18:30)
+#
+# Examples:
+#   peter,Mari,monday,09:00          # Peter books Mari's class on Mondays at 9 AM
+#   adrienne,Sarah,wednesday,18:30   # Adrienne books Sarah's class on Wednesdays at 6:30 PM
+#   lucy,Swim(30),friday,09:00       # Lucy books 30-minute swim on Fridays at 9 AM
+#   peter,Swim(15),tuesday,07:00     # Peter books 15-minute swim on Tuesdays at 7 AM
+#
+# Notes:
+# - Bookings are made exactly 8 days in advance when the time arrives
+# - Use "Swim(15)" or "Swim(30)" for swim bookings with duration
+# - Schedule is checked every 15 minutes via cron
+# - All class/swim times start on the quarter hour (00, 15, 30, 45)
+
+user,instructor,day_of_week,time
+peter,Mari,monday,09:00
+adrienne,Sarah,wednesday,18:30
+lucy,Swim(30),friday,09:00
+peter,Swim(15),tuesday,07:00
