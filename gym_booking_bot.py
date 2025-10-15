@@ -11,6 +11,7 @@ to prevent duplicates naturally.
 import asyncio
 import os
 from datetime import datetime, timedelta
+import pytz
 from playwright.async_api import async_playwright, Page, Browser
 
 class GymBookingBot:
@@ -311,7 +312,7 @@ class GymBookingBot:
         
         Args:
             schedule_entry: Schedule entry dictionary
-            current_time: Current datetime
+            current_time: Current datetime (timezone-aware UK time)
             
         Returns:
             Tuple of (should_book: bool, target_date: datetime)
@@ -373,7 +374,11 @@ class GymBookingBot:
         """
         Process the schedule from S3 and make any bookings that are due
         """        
-        print(f"🔍 Checking schedule at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        # Use UK timezone (handles BST automatically)
+        uk_tz = pytz.timezone('Europe/London')
+        current_time = datetime.now(uk_tz)
+        
+        print(f"🔍 Checking schedule at {current_time.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         
         # Load schedule from S3
         schedule = await self._load_schedule()
@@ -381,7 +386,6 @@ class GymBookingBot:
             print("No valid schedule entries found. Exiting gracefully.")
             return True
         
-        current_time = datetime.now()
         bookings_made = 0
         
         # Process each schedule entry
