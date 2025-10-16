@@ -12,9 +12,13 @@ import asyncio
 import os
 from datetime import datetime, timedelta
 import pytz
+from dotenv import load_dotenv
 from playwright.async_api import async_playwright, Page, Browser
 
-# Ensure Playwright finds browsers in Render environment
+# Load environment variables
+load_dotenv()
+
+# Ensure Playwright finds browsers in Render environment  
 if not os.getenv('PLAYWRIGHT_BROWSERS_PATH'):
     os.environ['PLAYWRIGHT_BROWSERS_PATH'] = '/opt/render/project/.playwright-browsers'
 
@@ -253,7 +257,9 @@ class GymBookingBot:
                     
                     # Check for various day name formats
                     day_name = target_date.strftime('%A')  # Friday
+                    day_header = target_date.strftime('%a %d %b')  # Fri 24 Oct
                     day_variants = [
+                        day_header,  # Fri 24 Oct (expected format)
                         day_name,  # Friday
                         day_name[:3],  # Fri
                         target_date.strftime('%a'),  # Fri
@@ -273,18 +279,21 @@ class GymBookingBot:
             
             # Find the day section for our target date
             day_name = target_date.strftime('%A')  # e.g., "Friday"
+            day_header = target_date.strftime('%a %d %b')  # e.g., "Fri 24 Oct"
             day_selectors = [
-                f'h2:has-text("{day_name}")',
-                f'h3:has-text("{day_name}")',
-                f'h1:has-text("{day_name}")',
-                f'td:has-text("{day_name}")',
-                f'th:has-text("{day_name}")',
-                f'div:has-text("{day_name}")',
-                f'*:has-text("{day_name}")',
-                f'*:has-text("{day_name[:3]}")',  # Try "Fri" instead of "Friday"
+                f'*:has-text("{day_header}")',  # Try full format first: "Fri 24 Oct"
+                f'h2:has-text("{day_header}")',
+                f'h3:has-text("{day_header}")',
+                f'h1:has-text("{day_header}")',
+                f'td:has-text("{day_header}")',
+                f'th:has-text("{day_header}")',
+                f'div:has-text("{day_header}")',
+                f'*:has-text("{day_name[:3]}")',  # Fallback to "Fri"
+                f'*:has-text("{day_name}")',  # Fallback to "Friday"
             ]
             
             day_section = None
+            print(f"Looking for day section: '{day_header}' (or fallbacks)")
             for selector in day_selectors:
                 try:
                     day_section = await page.wait_for_selector(selector, timeout=3000)
@@ -948,12 +957,23 @@ class GymBookingBot:
         current_time = current_time.replace(second=0, microsecond=0)  # Remove seconds/microseconds
         scheduled_time = current_time.replace(hour=scheduled_hour, minute=scheduled_minute)
         
+        # Debug output for scheduling logic
+        print(f"  📅 Target date: {target_date} ({target_day_name})")
+        print(f"  🕐 Current time: {current_time.strftime('%H:%M')}")
+        print(f"  ⏰ Scheduled time: {scheduled_time.strftime('%H:%M')}")
+        
         # Should book if current time >= scheduled time and within the same 15-minute window
         if current_time >= scheduled_time:
             # Check we're still in the same 15-minute window (to avoid re-booking)
             minutes_passed = (current_time - scheduled_time).total_seconds() / 60
+            print(f"  ⏱️  Minutes passed since scheduled time: {minutes_passed:.1f}")
             if minutes_passed < 15:  # Within 15 minutes of booking time
                 return True, target_date
+            else:
+                print(f"  ❌ Booking window closed (>15 minutes ago)")
+        else:
+            time_until = (scheduled_time - current_time).total_seconds() / 60
+            print(f"  ⏳ Time until booking: {time_until:.1f} minutes")
         
         return False, target_date
 
