@@ -7,7 +7,6 @@
 .env.production
 
 # State and data files
-booking_state.json
 *.json
 !schedule.csv.template
 !.env.template
@@ -87,6 +86,9 @@ screenshots/
 # Deployment specific
 .serverless/
 node_modules/
+
+# Development notes
+*.backup
 
 # Personal schedule files (keep templates only)
 schedule.csv
