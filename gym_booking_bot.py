@@ -237,25 +237,70 @@ class GymBookingBot:
             # Step 3: Find target date section
             print(f"Looking for {target_date.strftime('%A')} section...")
             
+            # Debug: Let's see what's actually on the page
+            print("🔍 Debugging page content...")
+            try:
+                page_title = await page.title()
+                current_url = page.url
+                print(f"📍 Current page: {page_title} ({current_url})")
+                
+                # Get a sample of page text to see the structure
+                body_text = await page.text_content('body')
+                if body_text:
+                    # Look for date-related text
+                    text_sample = body_text[:1000] if len(body_text) > 1000 else body_text
+                    print(f"📄 Page sample: {text_sample[:500]}...")
+                    
+                    # Check for various day name formats
+                    day_name = target_date.strftime('%A')  # Friday
+                    day_variants = [
+                        day_name,  # Friday
+                        day_name[:3],  # Fri
+                        target_date.strftime('%a'),  # Fri
+                        target_date.strftime('%d'),  # 24
+                        target_date.strftime('%d/%m'),  # 24/10
+                        target_date.strftime('%B %d')  # October 24
+                    ]
+                    
+                    print(f"🔍 Checking for day variants: {day_variants}")
+                    for variant in day_variants:
+                        if variant in body_text:
+                            print(f"✅ Found '{variant}' in page text")
+                        else:
+                            print(f"❌ '{variant}' not found in page text")
+            except Exception as e:
+                print(f"⚠️  Debug error: {e}")
+            
             # Find the day section for our target date
-            day_name = target_date.strftime('%A')  # e.g., "Monday"
+            day_name = target_date.strftime('%A')  # e.g., "Friday"
             day_selectors = [
                 f'h2:has-text("{day_name}")',
-                f'*:has-text("{day_name}")'
+                f'h3:has-text("{day_name}")',
+                f'h1:has-text("{day_name}")',
+                f'td:has-text("{day_name}")',
+                f'th:has-text("{day_name}")',
+                f'div:has-text("{day_name}")',
+                f'*:has-text("{day_name}")',
+                f'*:has-text("{day_name[:3]}")',  # Try "Fri" instead of "Friday"
             ]
             
             day_section = None
             for selector in day_selectors:
                 try:
-                    day_section = await page.wait_for_selector(selector, timeout=5000)
+                    day_section = await page.wait_for_selector(selector, timeout=3000)
                     if day_section:
-                        print(f"✅ Found {day_name} section")
+                        print(f"✅ Found {day_name} section with: {selector}")
                         break
                 except:
                     continue
             
             if not day_section:
-                print(f"❌ Could not find {day_name} section")
+                print(f"❌ Could not find {day_name} section with any selector")
+                print("🔍 Let's try to find any classes on the page...")
+                
+                # Try to find any class elements regardless of day
+                class_elements = await page.query_selector_all('*')
+                print(f"📊 Found {len(class_elements)} total elements on page")
                 return False
                 
             # Step 4: Look for class with matching instructor and time
