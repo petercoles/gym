@@ -315,45 +315,57 @@ class GymBookingBot:
             # Step 4: Look for class with matching instructor and time
             print(f"Looking for {instructor} at {time}...")
             
-            # Find all class elements that contain the instructor name
-            instructor_elements = await page.query_selector_all(f'*:has-text("{instructor}")')
+            # Find class containers that have both instructor and time
+            # Look for div.classDesktopWrapper containers (the main class container)
+            class_containers = await page.query_selector_all('div.classDesktopWrapper')
             
             class_booked = False
-            for element in instructor_elements:
+            for container in class_containers:
                 try:
-                    # Get the parent container of this instructor element
-                    parent = await element.evaluate('el => el.closest("div, td, li")')
-                    if parent:
-                        # Get text content of the parent to check for time
-                        parent_text = await parent.text_content()
+                    # Get all text content from this class container
+                    container_text = await container.text_content()
+                    
+                    # Check if this container has both the instructor and time
+                    has_instructor = instructor in container_text
+                    has_time = time in container_text or time.replace(':', '') in container_text
+                    
+                    if has_instructor and has_time:
+                        print(f"✅ Found {instructor} class at {time}")
                         
-                        # Check if this class contains our target time
-                        if time in parent_text or time.replace(':', '') in parent_text:
-                            print(f"✅ Found {instructor} class at {time}")
+                        # Look for booking button within this class container
+                        # The Book button should be in the overlay section
+                        booking_selectors = [
+                            'a.bookClassButton',
+                            'a:has-text("Book")',
+                            'a[href*="book" i]',
+                            'button:has-text("Book")',
+                            'a[id*="imBook"]'
+                        ]
+                        
+                        for book_selector in booking_selectors:
+                            try:
+                                book_element = await container.query_selector(book_selector)
+                                if book_element:
+                                    print(f"✅ Found booking element: {book_selector}")
+                                    await book_element.click()
+                                    await page.wait_for_load_state('networkidle')
+                                    class_booked = True
+                                    break
+                            except Exception as e:
+                                print(f"⚠️  Failed to click {book_selector}: {e}")
+                                continue
+                        
+                        if class_booked:
+                            break
+                    else:
+                        # Debug: show what we found in this container
+                        if instructor in container_text:
+                            print(f"📍 Found {instructor} but not {time} in: {container_text[:100]}...")
+                        elif time in container_text:
+                            print(f"📍 Found {time} but not {instructor} in: {container_text[:100]}...")
                             
-                            # Look for booking button within this class element
-                            booking_selectors = [
-                                'a[href*="book"]',
-                                'img[src*="book"]',
-                                '*:has-text("Book")',
-                                'a'
-                            ]
-                            
-                            for book_selector in booking_selectors:
-                                try:
-                                    book_element = await parent.query_selector(book_selector)
-                                    if book_element:
-                                        print(f"✅ Found booking element: {book_selector}")
-                                        await book_element.click()
-                                        await page.wait_for_load_state('networkidle')
-                                        class_booked = True
-                                        break
-                                except:
-                                    continue
-                            
-                            if class_booked:
-                                break
-                except:
+                except Exception as e:
+                    print(f"⚠️  Error checking container: {e}")
                     continue
             
             if not class_booked:
