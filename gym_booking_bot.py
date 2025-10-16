@@ -966,6 +966,26 @@ class GymBookingBot:
                 
                 print(f"🎯 Booking due: {entry['user']} - {entry['instructor']} on {target_date.strftime('%A, %Y-%m-%d')} at {entry['time']}")
                 
+                # Check for booking conflicts (especially critical for swim lanes)
+                duplicate_entries = [e for e in schedule if 
+                                   e['instructor'] == entry['instructor'] and 
+                                   e['time'] == entry['time'] and 
+                                   e['day_of_week'] == entry['day_of_week']]
+                
+                if len(duplicate_entries) > 1:
+                    users_for_this_slot = [e['user'] for e in duplicate_entries]
+                    is_swim_conflict = entry['instructor'].startswith('Swim(')
+                    
+                    if is_swim_conflict:
+                        print(f"🏊 Multiple users ({', '.join(users_for_this_slot)}) booking {entry['instructor']} at {entry['time']}")
+                        print(f"✅ Sequential booking should secure adjacent lanes (Lane 2, 3, 4 priority)")
+                    else:
+                        print(f"⚠️  Multiple users ({', '.join(users_for_this_slot)}) scheduled for {entry['instructor']} at {entry['time']}")
+                        if 'Terry' in entry['instructor']:
+                            print(f"✅ Terry class has 15 spots - should be OK if script runs fast")
+                        else:
+                            print(f"⚠️  Limited spots available - first booking will likely succeed")
+                
                 # Determine if this is a swim or class booking
                 is_swim, duration = self._parse_swim_instructor(entry['instructor'])
                 
