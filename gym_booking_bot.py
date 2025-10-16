@@ -130,6 +130,15 @@ class GymBookingBot:
                     continue
             
             print(f"✅ Login successful for {self.user_name} (assumed)")
+            
+            # Debug: Print current URL and page title
+            current_url = page.url
+            try:
+                page_title = await page.title()
+                print(f"📍 Current page: {page_title} ({current_url})")
+            except:
+                print(f"📍 Current URL: {current_url}")
+            
             return True  # Assume success if we can't verify
                 
         except Exception as e:
@@ -152,12 +161,53 @@ class GymBookingBot:
         try:
             print(f"Looking for {instructor} class at {time} on {target_date.strftime('%Y-%m-%d %A')}...")
             
-            # Step 1: Navigate directly to the Class Calendar page
-            print("Navigating directly to Class Calendar page...")
-            class_url = "https://online.thehogarth.co.uk/CCE/ClassCalendar.aspx"
-            await page.goto(class_url)
-            await page.wait_for_load_state('networkidle')
-            print("✅ Navigated to Class Calendar page")
+            # Step 1: Try to navigate to Class Calendar page (stay within authenticated session)
+            print("Looking for Classes navigation...")
+            
+            # First try to find a classes link on the current authenticated page
+            class_link_selectors = [
+                'a[href="../CCE/ClassCalendar.aspx"]',
+                'a[href*="ClassCalendar"]',
+                'a:has-text("Classes")',
+                'a:has-text("Class Calendar")',
+                'a:has-text("Book Classes")',
+                '*:has-text("Classes")',
+                '*:has-text("Class")'
+            ]
+            
+            navigated = False
+            for link_selector in class_link_selectors:
+                try:
+                    print(f"Looking for link: {link_selector}")
+                    class_link = await page.wait_for_selector(link_selector, timeout=3000)
+                    if class_link:
+                        print(f"✅ Found classes link: {link_selector}")
+                        await class_link.click()
+                        await page.wait_for_load_state('networkidle')
+                        navigated = True
+                        break
+                except Exception as e:
+                    print(f"⚠️  Link not found: {link_selector}")
+                    continue
+            
+            # If no link found, try direct navigation (but within the same session)
+            if not navigated:
+                print("No classes link found, trying direct navigation...")
+                try:
+                    class_url = "https://online.thehogarth.co.uk/CCE/ClassCalendar.aspx"
+                    print(f"Navigating to: {class_url}")
+                    await page.goto(class_url, timeout=15000)
+                    await page.wait_for_load_state('networkidle', timeout=10000)
+                    print("✅ Direct navigation successful")
+                    navigated = True
+                except Exception as e:
+                    print(f"❌ Direct navigation failed: {e}")
+            
+            if not navigated:
+                print("❌ Could not navigate to class calendar page")
+                return False
+                
+            print("✅ Successfully reached class calendar page")
             
             # Step 2: Click "Next" to advance to the bookable week (8 days ahead)
             print("Clicking Next to advance to bookable week...")
@@ -366,12 +416,54 @@ class GymBookingBot:
             time_period = self._infer_time_period(time)
             print(f"Booking swim lane for {target_date.strftime('%Y-%m-%d')} - {duration} minutes - {time} ({time_period})")
             
-            # Step 1: Navigate directly to the Swim page
-            print("Navigating directly to Swim page...")
-            swim_url = "https://online.thehogarth.co.uk/swim/Swim.aspx"
-            await page.goto(swim_url)
-            await page.wait_for_load_state('networkidle')
-            print("✅ Navigated to Swim page")
+            # Step 1: Try to navigate to Swim page (stay within authenticated session)
+            print("Looking for Swim navigation...")
+            
+            # First try to find a swim link on the current authenticated page
+            swim_link_selectors = [
+                'a[href="../swim/Swim.aspx"]',
+                'a[href*="Swim.aspx"]',
+                'a[href*="swim"]',
+                'a:has-text("Swim")',
+                'a:has-text("Swimming")',
+                'a:has-text("Pool")',
+                '*:has-text("Swim")',
+                '*:has-text("Pool")'
+            ]
+            
+            navigated = False
+            for link_selector in swim_link_selectors:
+                try:
+                    print(f"Looking for swim link: {link_selector}")
+                    swim_link = await page.wait_for_selector(link_selector, timeout=3000)
+                    if swim_link:
+                        print(f"✅ Found swim link: {link_selector}")
+                        await swim_link.click()
+                        await page.wait_for_load_state('networkidle')
+                        navigated = True
+                        break
+                except Exception as e:
+                    print(f"⚠️  Swim link not found: {link_selector}")
+                    continue
+            
+            # If no link found, try direct navigation (but within the same session)
+            if not navigated:
+                print("No swim link found, trying direct navigation...")
+                try:
+                    swim_url = "https://online.thehogarth.co.uk/swim/Swim.aspx"
+                    print(f"Navigating to: {swim_url}")
+                    await page.goto(swim_url, timeout=15000)
+                    await page.wait_for_load_state('networkidle', timeout=10000)
+                    print("✅ Direct swim navigation successful")
+                    navigated = True
+                except Exception as e:
+                    print(f"❌ Direct swim navigation failed: {e}")
+            
+            if not navigated:
+                print("❌ Could not navigate to swim page")
+                return False
+                
+            print("✅ Successfully reached swim page")
             
             # Step 2: Fill in date, duration, and time period
             
