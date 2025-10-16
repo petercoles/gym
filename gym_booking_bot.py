@@ -14,6 +14,10 @@ from datetime import datetime, timedelta
 import pytz
 from playwright.async_api import async_playwright, Page, Browser
 
+# Ensure Playwright finds browsers in Render environment
+if not os.getenv('PLAYWRIGHT_BROWSERS_PATH'):
+    os.environ['PLAYWRIGHT_BROWSERS_PATH'] = '/opt/render/project/.playwright-browsers'
+
 class GymBookingBot:
     def __init__(self, user_name: str = "peter"):
         self.gym_url = os.getenv('GYM_URL')
