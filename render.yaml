@@ -3,7 +3,12 @@ services:
     name: gym
     runtime: python
     schedule: "*/15 * * * *"
-    buildCommand: pip install -r requirements.txt
-    startCommand: |
+    buildCommand: |
+      pip install -r requirements.txt
+      export PLAYWRIGHT_BROWSERS_PATH=/opt/render/project/.playwright-browsers
+      mkdir -p $PLAYWRIGHT_BROWSERS_PATH
       playwright install chromium
-      python cron_booking.py
+    startCommand: python cron_booking.py
+    envVars:
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: /opt/render/project/.playwright-browsers
