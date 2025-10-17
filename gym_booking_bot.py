@@ -737,16 +737,17 @@ class GymBookingBot:
                     for time_slot in time_slots:
                         try:
                             # Look for the link within this time slot
-                            link = await time_slot.query_selector('a')
+                            link = await time_slot.query_selector('a.bookButton')
                             if link:
-                                slot_text = await time_slot.text_content()
+                                # Get the link text content, which should contain the time
+                                link_text = await link.text_content()
                                 
                                 # Check if this slot matches our preferred time
-                                if (time in slot_text or 
-                                    time.replace(':', '') in slot_text or
-                                    time.replace(':', '.') in slot_text):
+                                if (time in link_text or 
+                                    time.replace(':', '') in link_text or
+                                    time.replace(':', '.') in link_text):
                                     
-                                    print(f"✅ Found {time} slot in Lane {lane_num}: {slot_text.strip()}")
+                                    print(f"✅ Found {time} slot in Lane {lane_num}: {link_text.strip()}")
                                     await link.click()
                                     slot_booked = True
                                     break
