@@ -733,6 +733,7 @@ class GymBookingBot:
                     
                     # Find all timeSlot divs within this lane
                     time_slots = await lane_div.query_selector_all('div.timeSlot')
+                    print(f"🔍 Found {len(time_slots)} time slots in Lane {lane_num}")
                     
                     for time_slot in time_slots:
                         try:
@@ -741,17 +742,31 @@ class GymBookingBot:
                             if link:
                                 # Get the link text content, which should contain the time
                                 link_text = await link.text_content()
+                                print(f"🕐 Lane {lane_num} slot text: '{link_text}' (raw)")
                                 
-                                # Check if this slot matches our preferred time
-                                if (time in link_text or 
-                                    time.replace(':', '') in link_text or
-                                    time.replace(':', '.') in link_text):
-                                    
-                                    print(f"✅ Found {time} slot in Lane {lane_num}: {link_text.strip()}")
+                                # Clean up the text - remove all whitespace and extra content
+                                clean_text = link_text.strip()
+                                # Extract just the time part (before any spaces or numbers)
+                                time_part = clean_text.split()[0] if clean_text else ""
+                                print(f"🕐 Lane {lane_num} cleaned time: '{time_part}' (looking for '{time}')")
+                                
+                                # Try multiple matching approaches
+                                time_match = (
+                                    time == time_part or
+                                    time in clean_text or 
+                                    time.replace(':', '') in clean_text.replace(':', '') or
+                                    time.replace(':', '.') in clean_text or
+                                    clean_text.startswith(time.strip()) or
+                                    time_part == time
+                                )
+                                
+                                if time_match:
+                                    print(f"✅ Found {time} slot in Lane {lane_num}: '{clean_text}' -> '{time_part}'")
                                     await link.click()
                                     slot_booked = True
                                     break
                         except Exception as e:
+                            print(f"⚠️  Error checking time slot: {e}")
                             continue
                             
                     if not slot_booked:
