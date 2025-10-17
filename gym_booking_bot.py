@@ -668,32 +668,43 @@ class GymBookingBot:
             if not period_selected:
                 print(f"⚠️  Could not select time period '{time_period}', trying to find specific time directly")
             
-            # Step 3: Click "Go" button to load specific time slots
-            print("Looking for Go button to load time slots...")
-            go_selectors = [
-                'a#ctl00_mainContent_goBtn',
-            ]
+            # Step 3: Wait for automatic page update after dropdown selections
+            # The form uses onchange postbacks, no explicit Go button needed
+            print("Waiting for automatic page update after dropdown selections...")
             
-            go_clicked = False
-            for selector in go_selectors:
+            # If we successfully selected both duration and time period, wait for the page to update
+            if duration_selected and period_selected:
                 try:
-                    go_button = await page.wait_for_selector(selector, timeout=5000)
-                    if go_button:
-                        print(f"✅ Found Go button: {selector}")
-                        await go_button.click()
-                        go_clicked = True
-                        break
+                    await page.wait_for_load_state('networkidle', timeout=10000)
+                    await page.wait_for_timeout(3000)  # Give extra time for time slots to load
+                    print("✅ Page updated after dropdown selections")
                 except:
-                    continue
-            
-            if not go_clicked:
-                print("❌ Could not find Go button")
-                return False
-            
-            # Wait for the page to load the specific time slots
-            print("✅ Go clicked! Waiting for time slots to load...")
-            await page.wait_for_load_state('networkidle')
-            await page.wait_for_timeout(2000)
+                    print("⚠️  Page update timeout, continuing anyway")
+            else:
+                # Try to find a Go button as fallback
+                print("Looking for Go button as fallback...")
+                go_selectors = [
+                    'a#ctl00_mainContent_goBtn',
+                    'button:has-text("Go")',
+                    'input[value="Go"]',
+                    '.goBtn'
+                ]
+                
+                go_clicked = False
+                for selector in go_selectors:
+                    try:
+                        go_button = await page.wait_for_selector(selector, timeout=5000)
+                        if go_button:
+                            print(f"✅ Found Go button: {selector}")
+                            await go_button.click()
+                            await page.wait_for_load_state('networkidle')
+                            go_clicked = True
+                            break
+                    except:
+                        continue
+                
+                if not go_clicked:
+                    print("ℹ️  No Go button found, proceeding with time slot search")
             
             # Step 4: Look for available time slots in preferred lanes (2, 3, then 1, 4)
             print(f"Looking for {time} time slot in preferred lanes...")
