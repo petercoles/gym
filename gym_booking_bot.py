@@ -742,29 +742,26 @@ class GymBookingBot:
                             if link:
                                 # Get the link text content, which should contain the time
                                 link_text = await link.text_content()
-                                print(f"🕐 Lane {lane_num} slot text: '{link_text}' (raw)")
+                                print(f"🕐 Lane {lane_num} slot raw text: '{repr(link_text)}'")
                                 
-                                # Clean up the text - remove all whitespace and extra content
-                                clean_text = link_text.strip()
-                                # Extract just the time part (before any spaces or numbers)
-                                time_part = clean_text.split()[0] if clean_text else ""
-                                print(f"🕐 Lane {lane_num} cleaned time: '{time_part}' (looking for '{time}')")
+                                # Aggressively clean the text - strip all whitespace and extract time pattern
+                                import re
+                                clean_text = re.sub(r'\s+', ' ', link_text).strip()  # Replace all whitespace with single spaces
+                                # Look for time pattern HH:MM at the start
+                                time_match_obj = re.search(r'\b(\d{1,2}:\d{2})\b', clean_text)
                                 
-                                # Try multiple matching approaches
-                                time_match = (
-                                    time == time_part or
-                                    time in clean_text or 
-                                    time.replace(':', '') in clean_text.replace(':', '') or
-                                    time.replace(':', '.') in clean_text or
-                                    clean_text.startswith(time.strip()) or
-                                    time_part == time
-                                )
-                                
-                                if time_match:
-                                    print(f"✅ Found {time} slot in Lane {lane_num}: '{clean_text}' -> '{time_part}'")
-                                    await link.click()
-                                    slot_booked = True
-                                    break
+                                if time_match_obj:
+                                    extracted_time = time_match_obj.group(1)
+                                    print(f"🕐 Lane {lane_num} extracted time: '{extracted_time}' (looking for '{time}')")
+                                    
+                                    # Check if this matches our target time
+                                    if extracted_time == time:
+                                        print(f"✅ Found {time} slot in Lane {lane_num}: '{extracted_time}'")
+                                        await link.click()
+                                        slot_booked = True
+                                        break
+                                else:
+                                    print(f"🕐 Lane {lane_num} no time pattern found in: '{clean_text}'")
                         except Exception as e:
                             print(f"⚠️  Error checking time slot: {e}")
                             continue
