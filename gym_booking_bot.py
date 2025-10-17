@@ -13,7 +13,7 @@ import os
 from datetime import datetime, timedelta
 import pytz
 from dotenv import load_dotenv
-from playwright.async_api import async_playwright, Page, Browser
+from playwright.async_api import async_playwright, Page
 
 # Load environment variables
 load_dotenv()
@@ -36,6 +36,35 @@ class GymBookingBot:
         
         if not self.username or not self.password:
             raise ValueError(f"Please set {self.user_name}_USERNAME and {self.user_name}_PASSWORD in your .env file")
+
+    def _detect_browser_environment(self):
+        """Detect if running locally and find available browser"""
+        import platform
+        
+        is_local = (
+            os.getenv('RENDER') is None and  # Not on Render
+            platform.system() == 'Darwin'   # macOS (local machine)
+        )
+        
+        if is_local:
+            print("🏠 Running locally - using local Chromium installation")
+            local_chromium_paths = [
+                '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+                '/usr/local/bin/chromium',
+                '/opt/homebrew/bin/chromium',
+                '/Applications/Chromium.app/Contents/MacOS/Chromium'
+            ]
+            
+            for path in local_chromium_paths:
+                if os.path.exists(path):
+                    print(f"✅ Found browser at: {path}")
+                    return True, path
+            
+            print("⚠️  No local browser found, trying default Playwright installation")
+            return True, None
+        else:
+            print("☁️  Running on Render - using Playwright's bundled Chromium")
+            return False, None
 
     async def login(self, page: Page) -> bool:
         """
@@ -135,13 +164,7 @@ class GymBookingBot:
             
             print(f"✅ Login successful for {self.user_name} (assumed)")
             
-            # Debug: Print current URL and page title
-            current_url = page.url
-            try:
-                page_title = await page.title()
-                print(f"📍 Current page: {page_title} ({current_url})")
-            except:
-                print(f"📍 Current URL: {current_url}")
+
             
             return True  # Assume success if we can't verify
                 
@@ -241,41 +264,7 @@ class GymBookingBot:
             # Step 3: Find target date section
             print(f"Looking for {target_date.strftime('%A')} section...")
             
-            # Debug: Let's see what's actually on the page
-            print("🔍 Debugging page content...")
-            try:
-                page_title = await page.title()
-                current_url = page.url
-                print(f"📍 Current page: {page_title} ({current_url})")
-                
-                # Get a sample of page text to see the structure
-                body_text = await page.text_content('body')
-                if body_text:
-                    # Look for date-related text
-                    text_sample = body_text[:1000] if len(body_text) > 1000 else body_text
-                    print(f"📄 Page sample: {text_sample[:500]}...")
-                    
-                    # Check for various day name formats
-                    day_name = target_date.strftime('%A')  # Friday
-                    day_header = target_date.strftime('%a %d %b')  # Fri 24 Oct
-                    day_variants = [
-                        day_header,  # Fri 24 Oct (expected format)
-                        day_name,  # Friday
-                        day_name[:3],  # Fri
-                        target_date.strftime('%a'),  # Fri
-                        target_date.strftime('%d'),  # 24
-                        target_date.strftime('%d/%m'),  # 24/10
-                        target_date.strftime('%B %d')  # October 24
-                    ]
-                    
-                    print(f"🔍 Checking for day variants: {day_variants}")
-                    for variant in day_variants:
-                        if variant in body_text:
-                            print(f"✅ Found '{variant}' in page text")
-                        else:
-                            print(f"❌ '{variant}' not found in page text")
-            except Exception as e:
-                print(f"⚠️  Debug error: {e}")
+
             
             # Find the day section for our target date
             day_name = target_date.strftime('%A')  # e.g., "Friday"
@@ -304,12 +293,7 @@ class GymBookingBot:
                     continue
             
             if not day_section:
-                print(f"❌ Could not find {day_name} section with any selector")
-                print("🔍 Let's try to find any classes on the page...")
-                
-                # Try to find any class elements regardless of day
-                class_elements = await page.query_selector_all('*')
-                print(f"📊 Found {len(class_elements)} total elements on page")
+                print(f"❌ Could not find {day_name} section")
                 return False
                 
             # Step 4: Look for class with matching instructor and time
@@ -364,42 +348,59 @@ class GymBookingBot:
                             print(f"⚠️  Error opening class overlay: {e}")
                             continue
                         
-                        # Now look for booking button in the hopefully visible overlay
-                        booking_selectors = [
-                            'a.bookClassButton',
-                            'a:has-text("Book")',
-                            'a[href*="book" i]',
-                            'button:has-text("Book")',
-                            'a[id*="imBook"]'
-                        ]
+                        # Wait for overlay to fully load and DOM to stabilize
+                        print("⏳ Waiting for overlay to load completely...")
+                        await page.wait_for_timeout(2000)  # Wait longer for DOM changes
                         
-                        for book_selector in booking_selectors:
+                        # Now look for the booking button within this specific class container
+                        # Re-find the container since DOM may have changed after clicking
+                        updated_containers = await page.query_selector_all('div.classDesktopWrapper')
+                        
+                        for updated_container in updated_containers:
                             try:
-                                # Wait for the button to be visible after the overlay opens
-                                book_element = await container.wait_for_selector(book_selector, timeout=5000)
-                                if book_element:
-                                    # Check if the element is visible
-                                    is_visible = await book_element.is_visible()
-                                    if is_visible:
-                                        print(f"✅ Found visible booking element: {book_selector}")
-                                        await book_element.click()
-                                        await page.wait_for_load_state('networkidle')
-                                        class_booked = True
-                                        break
+                                # Check if this is still our Jackie class
+                                container_text = await updated_container.text_content()
+                                if instructor in container_text and time in container_text:
+                                    print(f"✅ Found updated container for {instructor} at {time}")
+                                    
+                                    # Look for booking button within this specific container
+                                    booking_button = await updated_container.query_selector('a.bookClassButton')
+                                    if booking_button:
+                                        button_text = await booking_button.text_content()
+                                        print(f"✅ Found booking button: '{button_text.strip()}'")
+                                        
+                                        # Check what type of button it is
+                                        if button_text:
+                                            if "waiting" in button_text.lower():
+                                                print(f"❌ Class is full - only waiting list available")
+                                                return False
+                                            elif "full" in button_text.lower():
+                                                print(f"❌ Class is full")
+                                                return False
+                                            elif "book" in button_text.lower():
+                                                is_visible = await booking_button.is_visible()
+                                                if is_visible:
+                                                    print(f"✅ Clicking booking button for {instructor} class")
+                                                    await booking_button.click()
+                                                    await page.wait_for_load_state('networkidle')
+                                                    class_booked = True
+                                                    break
+                                                else:
+                                                    print(f"⚠️  Booking button not visible")
+                                            else:
+                                                print(f"⚠️  Unknown button type: '{button_text.strip()}'")
                                     else:
-                                        print(f"📍 Found booking element but not visible: {book_selector}")
+                                        print(f"❌ No booking button found in {instructor} class container")
+                                    break
                             except Exception as e:
-                                print(f"⚠️  Failed to click {book_selector}: {e}")
+                                print(f"⚠️  Error checking container: {e}")
                                 continue
                         
                         if class_booked:
                             break
                     else:
-                        # Debug: show what we found in this container
-                        if instructor in container_text:
-                            print(f"📍 Found {instructor} but not {time} in: {container_text[:100]}...")
-                        elif time in container_text:
-                            print(f"📍 Found {time} but not {instructor} in: {container_text[:100]}...")
+                        # Class doesn't match - continue searching
+                        pass
                             
                 except Exception as e:
                     print(f"⚠️  Error checking container: {e}")
@@ -456,23 +457,36 @@ class GymBookingBot:
                             '*:has-text("success")'
                         ]
                         
+                        success_found = False
                         for success_selector in success_selectors:
                             try:
                                 success_element = await page.wait_for_selector(success_selector, timeout=5000)
                                 if success_element:
                                     success_text = await success_element.text_content()
                                     print(f"🎉 Class booking successful! {success_text}")
-                                    return True
+                                    success_found = True
+                                    break
                             except:
                                 continue
                         
-                        print(f"✅ Class booking likely successful: {instructor} at {time}")
-                        return True
+                        if success_found:
+                            return True
+                        else:
+                            print(f"⚠️  No booking success confirmation found for {instructor} at {time}")
+                            # Check if we're outside booking window
+                            page_content = await page.content()
+                            if "not available" in page_content.lower() or "fully booked" in page_content.lower():
+                                print("❌ Class not available or fully booked")
+                                return False
+                            else:
+                                print("❌ Booking may have failed - no success confirmation")
+                                return False
                 except:
                     continue
             
-            print("✅ Class booking completed (no confirmation button found)")
-            return True
+            print(f"❌ Could not find or book class: {instructor} at {time} on {target_date.strftime('%Y-%m-%d')}")
+            print("   This class may not exist on this date or is outside the bookable window")
+            return False
                 
         except Exception as e:
             print(f"❌ Error booking class {instructor} at {time}: {e}")
@@ -573,40 +587,98 @@ class GymBookingBot:
             
             # Select date
             print("Selecting date...")
-            date_selectors = [
-                'input#ctl00_mainContent_SessionDatePicker'
-            ]
-            
             target_date_str = target_date.strftime('%d/%m/%Y')  # Format: 25/10/2025
             date_selected = False
             
-            for selector in date_selectors:
-                try:
-                    date_input = await page.wait_for_selector(selector, timeout=3000)
-                    if date_input:
-                        # Check current value
-                        current_value = await date_input.get_attribute('value')
-                        print(f"📅 Current date value: {current_value}, Target: {target_date_str}")
+            try:
+                date_input = await page.wait_for_selector('input#ctl00_mainContent_SessionDatePicker', timeout=5000)
+                if date_input:
+                    # Check current value
+                    current_value = await date_input.get_attribute('value')
+                    print(f"📅 Current date value: {current_value}, Target: {target_date_str}")
+                    
+                    if current_value == target_date_str:
+                        print(f"✅ Date already set correctly: {current_value}")
+                        date_selected = True
+                    else:
+                        print("🗓️  Attempting to set date using datepicker widget...")
                         
-                        if current_value == target_date_str:
-                            print(f"✅ Date already set correctly: {current_value}")
-                            date_selected = True
-                        else:
-                            # Try to set the date value directly
+                        # Method 1: Try clicking the input to open the datepicker
+                        try:
+                            await date_input.click()
+                            await page.wait_for_timeout(1000)  # Wait for datepicker to open
+                            
+                            # Look for datepicker calendar
+                            calendar_selectors = [
+                                '.uk-datepicker',
+                                '[data-uk-datepicker]',
+                                '.datepicker',
+                                '.uk-dropdown'
+                            ]
+                            
+                            calendar_found = False
+                            for cal_selector in calendar_selectors:
+                                try:
+                                    calendar = await page.wait_for_selector(cal_selector, timeout=2000)
+                                    if calendar:
+                                        print(f"✅ Found datepicker calendar: {cal_selector}")
+                                        calendar_found = True
+                                        
+                                        # Try to find and click the target date
+                                        target_day = target_date.day
+                                        date_buttons = await page.query_selector_all(f'{cal_selector} button, {cal_selector} a, {cal_selector} .uk-datepicker-table td')
+                                        
+                                        for button in date_buttons:
+                                            button_text = await button.text_content()
+                                            if button_text and button_text.strip() == str(target_day):
+                                                print(f"🎯 Clicking date: {target_day}")
+                                                await button.click()
+                                                await page.wait_for_timeout(1000)
+                                                date_selected = True
+                                                break
+                                        break
+                                except:
+                                    continue
+                            
+                            if not calendar_found:
+                                print("⚠️  Could not find datepicker calendar")
+                        except Exception as e:
+                            print(f"⚠️  Could not open datepicker: {e}")
+                        
+                        # Method 2: Try JavaScript to set the value and trigger events
+                        if not date_selected:
                             try:
-                                await date_input.fill(target_date_str)
-                                await page.wait_for_timeout(500)  # Wait for any onchange events
-                                print(f"✅ Set date to: {target_date_str}")
-                                date_selected = True
+                                print("🔧 Trying JavaScript method to set date...")
+                                await page.evaluate(f"""
+                                    const input = document.querySelector('#ctl00_mainContent_SessionDatePicker');
+                                    if (input) {{
+                                        input.value = '{target_date_str}';
+                                        input.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                                        input.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                                        // Trigger the ASP.NET postback
+                                        if (typeof __doPostBack === 'function') {{
+                                            __doPostBack('ctl00$mainContent$SessionDatePicker', '');
+                                        }}
+                                    }}
+                                """)
+                                await page.wait_for_timeout(2000)  # Wait for postback
+                                
+                                # Check if the value was set
+                                new_value = await date_input.get_attribute('value')
+                                if new_value == target_date_str:
+                                    print(f"✅ Date set via JavaScript: {new_value}")
+                                    date_selected = True
+                                else:
+                                    print(f"⚠️  JavaScript method didn't work. Value: {new_value}")
                             except Exception as e:
-                                print(f"⚠️  Could not set date directly: {e}")
-                        break
-                except Exception as e:
-                    print(f"⚠️  Date selector error: {e}")
-                    continue
+                                print(f"⚠️  JavaScript method failed: {e}")
+                        
+            except Exception as e:
+                print(f"⚠️  Date selector error: {e}")
             
             if not date_selected:
-                print("⚠️  Could not verify date selection, continuing with default")
+                print("⚠️  Could not set date - will use today's slots (may be limited)")
+                print("🔄 Continuing with available slots for current date")
             
             # Select duration
             print(f"Selecting duration: {duration} minutes...")
@@ -730,9 +802,9 @@ class GymBookingBot:
             lane_priority = [2, 3, 4, 1]
             slot_booked = False
             
-            # Debug: Check what timeSlotInner elements we have
+
+            # Get lane containers for booking
             time_slot_inners = await page.query_selector_all('div.timeSlotInner')
-            print(f"📊 Found {len(time_slot_inners)} lane containers")
             
             for lane_num in lane_priority:
                 if slot_booked:
@@ -745,13 +817,8 @@ class GymBookingBot:
                     lane_div = time_slot_inners[lane_num - 1]
                     print(f"✅ Found Lane {lane_num} container")
                     
-                    # Debug: Check the structure of this lane
-                    lane_html = await lane_div.inner_html()
-                    print(f"🔍 Lane {lane_num} HTML length: {len(lane_html)} chars")
-                    
-                    # Find all timeSlot divs within this lane - try multiple selectors
+                    # Find all timeSlot divs within this lane
                     time_slots = await lane_div.query_selector_all('div.timeSlot')
-                    print(f"🔍 Found {len(time_slots)} time slots in Lane {lane_num} with 'div.timeSlot'")
                     
                     # Always try the booking button approach as it seems more reliable
                     booking_buttons = await lane_div.query_selector_all('a.bookButton')
@@ -1057,16 +1124,10 @@ class GymBookingBot:
         current_time = current_time.replace(second=0, microsecond=0)  # Remove seconds/microseconds
         scheduled_time = current_time.replace(hour=scheduled_hour, minute=scheduled_minute)
         
-        # Debug output for scheduling logic
-        print(f"  📅 Target date: {target_date} ({target_day_name})")
-        print(f"  🕐 Current time: {current_time.strftime('%H:%M')}")
-        print(f"  ⏰ Scheduled time: {scheduled_time.strftime('%H:%M')}")
-        
         # Should book if current time >= scheduled time and within the same 15-minute window
         if current_time >= scheduled_time:
             # Check we're still in the same 15-minute window (to avoid re-booking)
             minutes_passed = (current_time - scheduled_time).total_seconds() / 60
-            print(f"  ⏱️  Minutes passed since scheduled time: {minutes_passed:.1f}")
             if minutes_passed < 15:  # Within 15 minutes of booking time
                 return True, target_date
             else:
@@ -1159,7 +1220,17 @@ class GymBookingBot:
                 
                 success = False
                 async with async_playwright() as p:
-                    browser = await p.chromium.launch(headless=self.headless)
+                    # Use centralized browser detection
+                    is_local, browser_path = user_bot._detect_browser_environment()
+                    
+                    if is_local and browser_path:
+                        browser = await p.chromium.launch(
+                            headless=self.headless,
+                            executable_path=browser_path
+                        )
+                    else:
+                        browser = await p.chromium.launch(headless=self.headless)
+                    
                     context = await browser.new_context()
                     page = await context.new_page()
                     
