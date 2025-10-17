@@ -332,8 +332,39 @@ class GymBookingBot:
                     if has_instructor and has_time:
                         print(f"✅ Found {instructor} class at {time}")
                         
-                        # Look for booking button within this class container
-                        # The Book button should be in the overlay section
+                        # First, we need to make the overlay visible by clicking on the main class card
+                        # The booking button is in the overlay which is hidden by default
+                        try:
+                            # Try to click on the main class card to trigger the overlay
+                            class_card_selectors = [
+                                'div.classSelectFire',
+                                'div.uk-panel-box',
+                                'div.className'
+                            ]
+                            
+                            card_clicked = False
+                            for card_selector in class_card_selectors:
+                                try:
+                                    class_card = await container.query_selector(card_selector)
+                                    if class_card:
+                                        print(f"✅ Clicking class card: {card_selector}")
+                                        await class_card.click()
+                                        await page.wait_for_timeout(1000)  # Wait for overlay animation
+                                        card_clicked = True
+                                        break
+                                except Exception as e:
+                                    print(f"⚠️  Failed to click class card {card_selector}: {e}")
+                                    continue
+                            
+                            if not card_clicked:
+                                print("❌ Could not click class card to open overlay")
+                                continue
+                                
+                        except Exception as e:
+                            print(f"⚠️  Error opening class overlay: {e}")
+                            continue
+                        
+                        # Now look for booking button in the hopefully visible overlay
                         booking_selectors = [
                             'a.bookClassButton',
                             'a:has-text("Book")',
@@ -344,13 +375,19 @@ class GymBookingBot:
                         
                         for book_selector in booking_selectors:
                             try:
-                                book_element = await container.query_selector(book_selector)
+                                # Wait for the button to be visible after the overlay opens
+                                book_element = await container.wait_for_selector(book_selector, timeout=5000)
                                 if book_element:
-                                    print(f"✅ Found booking element: {book_selector}")
-                                    await book_element.click()
-                                    await page.wait_for_load_state('networkidle')
-                                    class_booked = True
-                                    break
+                                    # Check if the element is visible
+                                    is_visible = await book_element.is_visible()
+                                    if is_visible:
+                                        print(f"✅ Found visible booking element: {book_selector}")
+                                        await book_element.click()
+                                        await page.wait_for_load_state('networkidle')
+                                        class_booked = True
+                                        break
+                                    else:
+                                        print(f"📍 Found booking element but not visible: {book_selector}")
                             except Exception as e:
                                 print(f"⚠️  Failed to click {book_selector}: {e}")
                                 continue
@@ -377,7 +414,8 @@ class GymBookingBot:
             
             # Accept terms if they appear
             checkbox_selectors = [
-                'input#ctl00_mainContent_Terms',
+                'input#ctl00_mainContent_chkTerms',  # Updated to match actual HTML
+                'input#ctl00_mainContent_Terms',     # Keep old one as fallback
                 'input[type="checkbox"]'
             ]
             
@@ -740,7 +778,8 @@ class GymBookingBot:
             await page.wait_for_load_state('networkidle')
             
             checkbox_selectors = [
-                'input#ctl00_mainContent_Terms',
+                'input#ctl00_mainContent_chkTerms',  # Updated to match actual HTML
+                'input#ctl00_mainContent_Terms',     # Keep old one as fallback
             ]
             
             checkbox_found = False
