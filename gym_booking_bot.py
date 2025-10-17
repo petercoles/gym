@@ -577,32 +577,36 @@ class GymBookingBot:
                 'input#ctl00_mainContent_SessionDatePicker'
             ]
             
-            target_date_str = target_date.strftime('%d/%m/%Y')
+            target_date_str = target_date.strftime('%d/%m/%Y')  # Format: 25/10/2025
             date_selected = False
             
             for selector in date_selectors:
                 try:
-                    date_select = await page.wait_for_selector(selector, timeout=3000)
-                    if date_select:
-                        # Try to select the target date
-                        options = await page.query_selector_all(f'{selector} option')
-                        for option in options:
-                            option_text = await option.text_content()
-                            option_value = await option.get_attribute('value')
-                            if (target_date_str in option_text or 
-                                target_date.strftime('%d/%m/%Y') in option_text or
-                                target_date.strftime('%m/%d/%Y') in option_text):
-                                print(f"✅ Selecting date option: {option_text}")
-                                await date_select.select_option(value=option_value)
+                    date_input = await page.wait_for_selector(selector, timeout=3000)
+                    if date_input:
+                        # Check current value
+                        current_value = await date_input.get_attribute('value')
+                        print(f"📅 Current date value: {current_value}, Target: {target_date_str}")
+                        
+                        if current_value == target_date_str:
+                            print(f"✅ Date already set correctly: {current_value}")
+                            date_selected = True
+                        else:
+                            # Try to set the date value directly
+                            try:
+                                await date_input.fill(target_date_str)
+                                await page.wait_for_timeout(500)  # Wait for any onchange events
+                                print(f"✅ Set date to: {target_date_str}")
                                 date_selected = True
-                                break
-                        if date_selected:
-                            break
-                except:
+                            except Exception as e:
+                                print(f"⚠️  Could not set date directly: {e}")
+                        break
+                except Exception as e:
+                    print(f"⚠️  Date selector error: {e}")
                     continue
             
             if not date_selected:
-                print("⚠️  Could not select specific date, using default")
+                print("⚠️  Could not verify date selection, continuing with default")
             
             # Select duration
             print(f"Selecting duration: {duration} minutes...")
@@ -641,7 +645,7 @@ class GymBookingBot:
             
             time_period_keywords = {
                 "morning": ["Morning (Before 12:00)"],
-                "afternoon": ["Afternoon (12:00-17:00)"],
+                "afternoon": ["Afternoon (12:00 - 17:00)"],  # Fixed: added spaces around hyphen
                 "evening": ["Evening (After 17:00)"]
             }
             
