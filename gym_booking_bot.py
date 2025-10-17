@@ -712,6 +712,20 @@ class GymBookingBot:
             # Step 4: Look for available time slots in preferred lanes (2, 3, then 1, 4)
             print(f"Looking for {time} time slot in preferred lanes...")
             
+            # Wait for time slots to fully load - they may load dynamically
+            print("⏳ Waiting for time slots to load...")
+            await page.wait_for_timeout(3000)  # Wait 3 seconds for dynamic loading
+            
+            # Wait for the timeSlots containers to have the 'loaded' class
+            try:
+                await page.wait_for_selector('.timeSlots.loaded', timeout=5000)
+                print("✅ Time slots marked as loaded")
+            except:
+                print("⚠️  Time slots 'loaded' class not found, continuing anyway")
+                
+            # Additional wait for CSS transitions
+            await page.wait_for_timeout(2000)
+            
             # Priority order: Lane 2, Lane 3, Lane 4, Lane 1
             lane_priority = [2, 3, 4, 1]
             slot_booked = False
@@ -739,87 +753,38 @@ class GymBookingBot:
                     time_slots = await lane_div.query_selector_all('div.timeSlot')
                     print(f"🔍 Found {len(time_slots)} time slots in Lane {lane_num} with 'div.timeSlot'")
                     
-                    # If no slots found, try alternative selectors
-                    if len(time_slots) == 0:
-                        time_slots = await lane_div.query_selector_all('.timeSlot')
-                        print(f"🔍 Found {len(time_slots)} time slots in Lane {lane_num} with '.timeSlot'")
-                        
-                    if len(time_slots) == 0:
-                        # Try finding all elements with class containing timeSlot
-                        time_slots = await lane_div.query_selector_all('[class*="timeSlot"]')
-                        print(f"🔍 Found {len(time_slots)} time slots in Lane {lane_num} with '[class*=\"timeSlot\"]'")
-                        
-                    if len(time_slots) == 0:
-                        # Debug: Look for any divs
-                        all_divs = await lane_div.query_selector_all('div')
-                        print(f"🔍 Found {len(all_divs)} total divs in Lane {lane_num}")
-                        
-                        # Look for booking buttons
-                        booking_buttons = await lane_div.query_selector_all('a.bookButton')
-                        print(f"🔍 Found {len(booking_buttons)} booking buttons in Lane {lane_num}")
-                        
-                        # If we have booking buttons but no timeSlot divs, use the buttons directly
-                        if len(booking_buttons) > 0:
-                            print(f"🔄 Using booking buttons directly for Lane {lane_num}")
-                            for button in booking_buttons:
-                                try:
-                                    # Get the button text content directly
-                                    link_text = await button.text_content()
-                                    print(f"🕐 Lane {lane_num} button raw text: '{repr(link_text)}'")
-                                    
-                                    # Extract time pattern
-                                    import re
-                                    clean_text = re.sub(r'\s+', ' ', link_text).strip()
-                                    time_match_obj = re.search(r'\b(\d{1,2}:\d{2})\b', clean_text)
-                                    
-                                    if time_match_obj:
-                                        extracted_time = time_match_obj.group(1)
-                                        print(f"🕐 Lane {lane_num} extracted time: '{extracted_time}' (looking for '{time}')")
-                                        
-                                        if extracted_time == time:
-                                            print(f"✅ Found {time} slot in Lane {lane_num}: '{extracted_time}'")
-                                            await button.click()
-                                            slot_booked = True
-                                            break
-                                except Exception as e:
-                                    print(f"⚠️  Error checking button: {e}")
-                                    continue
-                                    
-                            if slot_booked:
-                                break
+                    # Always try the booking button approach as it seems more reliable
+                    booking_buttons = await lane_div.query_selector_all('a.bookButton')
+                    print(f"🔍 Found {len(booking_buttons)} booking buttons in Lane {lane_num}")
                     
-                    # If we found timeSlot divs, process them normally
-                    if len(time_slots) > 0 and not slot_booked:
-                        for time_slot in time_slots:
+                    # Use booking buttons approach if we have them
+                    if len(booking_buttons) > 0:
+                        print(f"🔄 Using booking buttons approach for Lane {lane_num}")
+                        for button in booking_buttons:
                             try:
-                                # Look for the link within this time slot
-                                link = await time_slot.query_selector('a.bookButton')
-                                if link:
-                                    # Get the link text content, which should contain the time
-                                    link_text = await link.text_content()
-                                    print(f"🕐 Lane {lane_num} slot raw text: '{repr(link_text)}'")
+                                # Get the button text content directly
+                                link_text = await button.text_content()
+                                
+                                # Extract time pattern
+                                import re
+                                clean_text = re.sub(r'\s+', ' ', link_text).strip()
+                                time_match_obj = re.search(r'\b(\d{1,2}:\d{2})\b', clean_text)
+                                
+                                if time_match_obj:
+                                    extracted_time = time_match_obj.group(1)
+                                    print(f"🕐 Lane {lane_num} extracted time: '{extracted_time}' (looking for '{time}')")
                                     
-                                    # Aggressively clean the text - strip all whitespace and extract time pattern
-                                    import re
-                                    clean_text = re.sub(r'\s+', ' ', link_text).strip()  # Replace all whitespace with single spaces
-                                    # Look for time pattern HH:MM at the start
-                                    time_match_obj = re.search(r'\b(\d{1,2}:\d{2})\b', clean_text)
-                                    
-                                    if time_match_obj:
-                                        extracted_time = time_match_obj.group(1)
-                                        print(f"🕐 Lane {lane_num} extracted time: '{extracted_time}' (looking for '{time}')")
-                                        
-                                        # Check if this matches our target time
-                                        if extracted_time == time:
-                                            print(f"✅ Found {time} slot in Lane {lane_num}: '{extracted_time}'")
-                                            await link.click()
-                                            slot_booked = True
-                                            break
-                                    else:
-                                        print(f"🕐 Lane {lane_num} no time pattern found in: '{clean_text}'")
+                                    if extracted_time == time:
+                                        print(f"✅ Found {time} slot in Lane {lane_num}: '{extracted_time}'")
+                                        await button.click()
+                                        slot_booked = True
+                                        break
                             except Exception as e:
-                                print(f"⚠️  Error checking time slot: {e}")
+                                print(f"⚠️  Error checking button: {e}")
                                 continue
+                                
+                        if slot_booked:
+                            break
                             
                     if not slot_booked:
                         print(f"⚠️  No {time} slot available in Lane {lane_num}")
