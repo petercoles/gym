@@ -622,6 +622,7 @@ class GymBookingBot:
                             if str(duration) in option_text:
                                 print(f"✅ Selecting duration: {option_text}")
                                 await duration_select.select_option(value=option_value)
+                                await page.wait_for_timeout(1000)  # Wait for onchange event
                                 duration_selected = True
                                 break
                         if duration_selected:
@@ -658,6 +659,7 @@ class GymBookingBot:
                             if any(keyword in option_text for keyword in time_period_keywords.get(time_period, [])):
                                 print(f"✅ Selecting time period: {option_text}")
                                 await period_select.select_option(value=option_value)
+                                await page.wait_for_timeout(1000)  # Wait for onchange event
                                 period_selected = True
                                 break
                         if period_selected:
@@ -666,45 +668,42 @@ class GymBookingBot:
                     continue
             
             if not period_selected:
-                print(f"⚠️  Could not select time period '{time_period}', trying to find specific time directly")
+                print(f"⚠️  Could not select time period '{time_period}'")
             
-            # Step 3: Wait for automatic page update after dropdown selections
-            # The form uses onchange postbacks, no explicit Go button needed
-            print("Waiting for automatic page update after dropdown selections...")
+            # Step 3: Click Go button to load time slots
+            # The Go button only appears after both duration and time period are selected
+            if not duration_selected or not period_selected:
+                print("❌ Cannot proceed without both duration and time period selected")
+                return False
+                
+            print("Both dropdowns selected, looking for Go button...")
+            await page.wait_for_timeout(1000)  # Give time for Go button to appear
             
-            # If we successfully selected both duration and time period, wait for the page to update
-            if duration_selected and period_selected:
+            go_selectors = [
+                'a#ctl00_mainContent_goBtn',
+                'button:has-text("Go")',
+                'input[value="Go"]',
+                '.goBtn'
+            ]
+            
+            go_clicked = False
+            for selector in go_selectors:
                 try:
-                    await page.wait_for_load_state('networkidle', timeout=10000)
-                    await page.wait_for_timeout(3000)  # Give extra time for time slots to load
-                    print("✅ Page updated after dropdown selections")
-                except:
-                    print("⚠️  Page update timeout, continuing anyway")
-            else:
-                # Try to find a Go button as fallback
-                print("Looking for Go button as fallback...")
-                go_selectors = [
-                    'a#ctl00_mainContent_goBtn',
-                    'button:has-text("Go")',
-                    'input[value="Go"]',
-                    '.goBtn'
-                ]
-                
-                go_clicked = False
-                for selector in go_selectors:
-                    try:
-                        go_button = await page.wait_for_selector(selector, timeout=5000)
-                        if go_button:
-                            print(f"✅ Found Go button: {selector}")
-                            await go_button.click()
-                            await page.wait_for_load_state('networkidle')
-                            go_clicked = True
-                            break
-                    except:
-                        continue
-                
-                if not go_clicked:
-                    print("ℹ️  No Go button found, proceeding with time slot search")
+                    go_button = await page.wait_for_selector(selector, timeout=5000)
+                    if go_button:
+                        print(f"✅ Found Go button: {selector}")
+                        await go_button.click()
+                        await page.wait_for_load_state('networkidle', timeout=15000)
+                        await page.wait_for_timeout(3000)  # Extra time for time slots to load
+                        go_clicked = True
+                        break
+                except Exception as e:
+                    print(f"⚠️  Go button click failed for {selector}: {e}")
+                    continue
+            
+            if not go_clicked:
+                print("❌ Could not find or click Go button after dropdown selections")
+                return False
             
             # Step 4: Look for available time slots in preferred lanes (2, 3, then 1, 4)
             print(f"Looking for {time} time slot in preferred lanes...")
@@ -713,18 +712,20 @@ class GymBookingBot:
             lane_priority = [2, 3, 4, 1]
             slot_booked = False
             
+            # Debug: Check what timeSlotInner elements we have
+            time_slot_inners = await page.query_selector_all('div.timeSlotInner')
+            print(f"📊 Found {len(time_slot_inners)} lane containers")
+            
             for lane_num in lane_priority:
                 if slot_booked:
                     break
                     
                 print(f"Checking Lane {lane_num} for {time}...")
                 
-                # Find all timeSlotInner divs (one for each lane)
-                time_slot_inners = await page.query_selector_all('div.timeSlotInner')
-                
                 if len(time_slot_inners) >= lane_num:
                     # Get the timeSlotInner for this specific lane (0-indexed)
                     lane_div = time_slot_inners[lane_num - 1]
+                    print(f"✅ Found Lane {lane_num} container")
                     
                     # Find all timeSlot divs within this lane
                     time_slots = await lane_div.query_selector_all('div.timeSlot')
