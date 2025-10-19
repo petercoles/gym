@@ -10,10 +10,16 @@ to prevent duplicates naturally.
 
 import asyncio
 import os
+import re
 from datetime import datetime, timedelta
-import pytz
 from dotenv import load_dotenv
 from playwright.async_api import async_playwright, Page
+
+try:
+    import pytz
+except ImportError:
+    print("Warning: pytz not installed. UK timezone handling may be limited.")
+    pytz = None
 
 # Load environment variables
 load_dotenv()
@@ -24,18 +30,20 @@ if not os.getenv('PLAYWRIGHT_BROWSERS_PATH'):
 
 class GymBookingBot:
     def __init__(self, user_name: str = "peter"):
-        self.gym_url = os.getenv('GYM_URL')
-        if not self.gym_url:
+        gym_url = os.getenv('GYM_URL')
+        if not gym_url:
             raise ValueError("Please set GYM_URL in your .env file")
+        self.gym_url: str = gym_url
         self.user_name = user_name.upper()
         
         # Load credentials for the specified user
-        self.username = os.getenv(f'{self.user_name}_USERNAME')
-        self.password = os.getenv(f'{self.user_name}_PASSWORD')
-        self.headless = os.getenv('HEADLESS', 'false').lower() == 'true'
-        
-        if not self.username or not self.password:
+        username = os.getenv(f'{self.user_name}_USERNAME')
+        password = os.getenv(f'{self.user_name}_PASSWORD')
+        if not username or not password:
             raise ValueError(f"Please set {self.user_name}_USERNAME and {self.user_name}_PASSWORD in your .env file")
+        self.username: str = username
+        self.password: str = password
+        self.headless = os.getenv('HEADLESS', 'false').lower() == 'true'
 
     def _detect_browser_environment(self):
         """Detect if running locally and find available browser"""
@@ -308,6 +316,8 @@ class GymBookingBot:
                 try:
                     # Get all text content from this class container
                     container_text = await container.text_content()
+                    if not container_text:
+                        continue
                     
                     # Check if this container has both the instructor and time
                     has_instructor = instructor in container_text
@@ -358,16 +368,17 @@ class GymBookingBot:
                         
                         for updated_container in updated_containers:
                             try:
-                                # Check if this is still our Jackie class
+                                # Check if this is still our class
                                 container_text = await updated_container.text_content()
-                                if instructor in container_text and time in container_text:
+                                if container_text and instructor in container_text and time in container_text:
                                     print(f"✅ Found updated container for {instructor} at {time}")
                                     
                                     # Look for booking button within this specific container
                                     booking_button = await updated_container.query_selector('a.bookClassButton')
                                     if booking_button:
                                         button_text = await booking_button.text_content()
-                                        print(f"✅ Found booking button: '{button_text.strip()}'")
+                                        display_text = button_text.strip() if button_text else "Unknown"
+                                        print(f"✅ Found booking button: '{display_text}'")
                                         
                                         # Check what type of button it is
                                         if button_text:
@@ -695,7 +706,7 @@ class GymBookingBot:
                         for option in options:
                             option_text = await option.text_content()
                             option_value = await option.get_attribute('value')
-                            if str(duration) in option_text:
+                            if option_text and str(duration) in option_text:
                                 print(f"✅ Selecting duration: {option_text}")
                                 await duration_select.select_option(value=option_value)
                                 await page.wait_for_timeout(1000)  # Wait for onchange event
@@ -732,7 +743,7 @@ class GymBookingBot:
                             option_value = await option.get_attribute('value')
                             
                             # Check if this option matches our time period
-                            if any(keyword in option_text for keyword in time_period_keywords.get(time_period, [])):
+                            if option_text and any(keyword in option_text for keyword in time_period_keywords.get(time_period, [])):
                                 print(f"✅ Selecting time period: {option_text}")
                                 await period_select.select_option(value=option_value)
                                 await page.wait_for_timeout(1000)  # Wait for onchange event
@@ -833,7 +844,8 @@ class GymBookingBot:
                                 link_text = await button.text_content()
                                 
                                 # Extract time pattern
-                                import re
+                                if not link_text:
+                                    continue
                                 clean_text = re.sub(r'\s+', ' ', link_text).strip()
                                 time_match_obj = re.search(r'\b(\d{1,2}:\d{2})\b', clean_text)
                                 
@@ -1106,14 +1118,16 @@ class GymBookingBot:
             Tuple of (should_book: bool, target_date: datetime)
         """
         # Calculate target date (8 days from now)
-        target_date = current_time.date() + timedelta(days=8)
+        target_date_obj = current_time.date() + timedelta(days=8)
+        # Convert to datetime for consistent return type
+        target_datetime = datetime.combine(target_date_obj, datetime.min.time()).replace(tzinfo=current_time.tzinfo)
         
         # Check if target date matches the scheduled day of week
         day_names = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
-        target_day_name = day_names[target_date.weekday()]
+        target_day_name = day_names[target_date_obj.weekday()]
         
         if target_day_name != schedule_entry['day_of_week']:
-            return False, target_date
+            return False, target_datetime
         
         # Parse scheduled time
         scheduled_time_parts = schedule_entry['time'].split(':')
@@ -1129,14 +1143,14 @@ class GymBookingBot:
             # Check we're still in the same 15-minute window (to avoid re-booking)
             minutes_passed = (current_time - scheduled_time).total_seconds() / 60
             if minutes_passed < 15:  # Within 15 minutes of booking time
-                return True, target_date
+                return True, target_datetime
             else:
                 print(f"  ❌ Booking window closed (>15 minutes ago)")
         else:
             time_until = (scheduled_time - current_time).total_seconds() / 60
             print(f"  ⏳ Time until booking: {time_until:.1f} minutes")
         
-        return False, target_date
+        return False, target_datetime
 
     def _parse_swim_instructor(self, instructor: str) -> tuple[bool, int]:
         """
@@ -1168,8 +1182,12 @@ class GymBookingBot:
         Process the schedule from S3 and make any bookings that are due
         """        
         # Use UK timezone (handles BST automatically)
-        uk_tz = pytz.timezone('Europe/London')
-        current_time = datetime.now(uk_tz)
+        if pytz:
+            uk_tz = pytz.timezone('Europe/London')
+            current_time = datetime.now(uk_tz)
+        else:
+            # Fallback to system timezone if pytz not available
+            current_time = datetime.now()
         
         print(f"🔍 Checking schedule at {current_time.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         
