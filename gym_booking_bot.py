@@ -8,18 +8,15 @@ Simplified version without state management - relies on 15-minute booking window
 to prevent duplicates naturally.
 """
 
-import asyncio
 import os
 import re
+import pytz
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from playwright.async_api import async_playwright, Page
-
-try:
-    import pytz
-except ImportError:
-    print("Warning: pytz not installed. UK timezone handling may be limited.")
-    pytz = None
 
 # Load environment variables
 load_dotenv()
@@ -73,6 +70,68 @@ class GymBookingBot:
         else:
             print("☁️  Running on Render - using Playwright's bundled Chromium")
             return False, None
+
+    def _send_booking_failure_email(self, booking_details: dict, failure_reason: str, error_details: str = ""):
+        """Send email notification when a booking fails"""
+        try:
+            # Get email configuration from environment variables
+            smtp_server = os.getenv('SMTP_SERVER', 'smtp.gmail.com')
+            smtp_port = int(os.getenv('SMTP_PORT', '587'))
+            smtp_user = os.getenv('SENDER_EMAIL')
+            smtp_password = os.getenv('SENDER_PASSWORD')
+            notification_email = os.getenv('RECIPIENT_EMAIL')
+            
+            if not smtp_user or not smtp_password or not notification_email:
+                print("⚠️  Email notification skipped - SMTP credentials not configured")
+                return
+            
+            # Format booking details
+            booking_type = "Swim Lane" if booking_details.get('is_swim') else "Class"
+            duration_text = f" ({booking_details.get('duration')}min)" if booking_details.get('is_swim') else ""
+            instructor_text = booking_details.get('instructor', 'Unknown')
+            
+            # Create email message
+            msg = MIMEMultipart()
+            msg['From'] = smtp_user
+            msg['To'] = notification_email
+            msg['Subject'] = f"🚨 Hogarth Booking Failed - {booking_details.get('user', 'Unknown')} - {instructor_text}"
+            
+            # Email body
+            body = f"""
+Hogarth Gym Booking Failure Alert
+
+❌ BOOKING FAILED ❌
+
+User: {booking_details.get('user', 'Unknown')}
+Type: {booking_type}{duration_text}
+Instructor/Activity: {instructor_text}
+Time: {booking_details.get('time', 'Unknown')}
+Target Date: {booking_details.get('target_date', 'Unknown')}
+
+Failure Reason: {failure_reason}
+
+{f'Technical Details: {error_details}' if error_details else ''}
+
+This booking was scheduled to occur automatically but failed to complete.
+You may need to book manually or check the system configuration.
+
+Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+            """.strip()
+            
+            msg.attach(MIMEText(body, 'plain'))
+            
+            # Send email
+            server = smtplib.SMTP(smtp_server, smtp_port)
+            server.starttls()
+            server.login(smtp_user, smtp_password)
+            text = msg.as_string()
+            server.sendmail(smtp_user, notification_email, text)
+            server.quit()
+            
+            print(f"📧 Failure notification email sent to {notification_email}")
+            
+        except Exception as e:
+            print(f"⚠️  Failed to send email notification: {e}")
 
     async def login(self, page: Page) -> bool:
         """
@@ -797,17 +856,19 @@ class GymBookingBot:
             
             # Wait for time slots to fully load - they may load dynamically
             print("⏳ Waiting for time slots to load...")
-            await page.wait_for_timeout(3000)  # Wait 3 seconds for dynamic loading
+            await page.wait_for_timeout(5000)  # Increased: Wait 5 seconds for dynamic loading
             
             # Wait for the timeSlots containers to have the 'loaded' class
             try:
-                await page.wait_for_selector('.timeSlots.loaded', timeout=5000)
+                await page.wait_for_selector('.timeSlots.loaded', timeout=12000)  # Increased: 12 seconds
                 print("✅ Time slots marked as loaded")
             except:
-                print("⚠️  Time slots 'loaded' class not found, continuing anyway")
+                print("⚠️  Time slots 'loaded' class not found, waiting additional time...")
+                # If 'loaded' class not found, wait longer before continuing
+                await page.wait_for_timeout(5000)  # Increased: 5 more seconds
                 
-            # Additional wait for CSS transitions
-            await page.wait_for_timeout(2000)
+            # Additional wait for CSS transitions and final rendering
+            await page.wait_for_timeout(3000)  # Increased: 3 seconds for transitions
             
             # Priority order: Lane 2, Lane 3, Lane 4, Lane 1
             lane_priority = [2, 3, 4, 1]
@@ -1256,6 +1317,19 @@ class GymBookingBot:
                         # Login
                         if not await user_bot.login(page):
                             print(f"❌ Login failed for {entry['user']}")
+                            # Send email notification for login failure
+                            self._send_booking_failure_email(
+                                {
+                                    'user': entry['user'],
+                                    'instructor': entry['instructor'],
+                                    'time': entry['time'],
+                                    'target_date': target_date.strftime('%Y-%m-%d (%A)'),
+                                    'is_swim': is_swim,
+                                    'duration': duration if is_swim else None
+                                },
+                                "Login Authentication Failed",
+                                "Could not log into the gym website with provided credentials"
+                            )
                             continue
                         
                         if is_swim:
@@ -1266,6 +1340,19 @@ class GymBookingBot:
                                 bookings_made += 1
                             else:
                                 print(f"❌ Swim booking failed: {entry['user']} - {duration}min at {entry['time']}")
+                                # Send email notification for swim booking failure
+                                self._send_booking_failure_email(
+                                    {
+                                        'user': entry['user'],
+                                        'instructor': entry['instructor'],
+                                        'time': entry['time'],
+                                        'target_date': target_date.strftime('%Y-%m-%d (%A)'),
+                                        'is_swim': True,
+                                        'duration': duration
+                                    },
+                                    "Swim Lane Booking Failed",
+                                    "Could not secure swim lane - may be fully booked or page loading issues"
+                                )
                         else:
                             # Make class booking
                             success = await user_bot.book_class(page, target_date, entry['instructor'], entry['time'])
@@ -1274,9 +1361,35 @@ class GymBookingBot:
                                 bookings_made += 1
                             else:
                                 print(f"❌ Class booking failed: {entry['user']} - {entry['instructor']} at {entry['time']}")
+                                # Send email notification for class booking failure
+                                self._send_booking_failure_email(
+                                    {
+                                        'user': entry['user'],
+                                        'instructor': entry['instructor'],
+                                        'time': entry['time'],
+                                        'target_date': target_date.strftime('%Y-%m-%d (%A)'),
+                                        'is_swim': False,
+                                        'duration': None
+                                    },
+                                    "Class Booking Failed",
+                                    f"Could not book {entry['instructor']} class - may be full, cancelled, or not available on this date"
+                                )
                         
                     except Exception as e:
                         print(f"❌ Error processing booking for {entry['user']}: {e}")
+                        # Send email notification for unexpected errors
+                        self._send_booking_failure_email(
+                            {
+                                'user': entry['user'],
+                                'instructor': entry['instructor'],
+                                'time': entry['time'],
+                                'target_date': target_date.strftime('%Y-%m-%d (%A)'),
+                                'is_swim': is_swim,
+                                'duration': duration if is_swim else None
+                            },
+                            "Booking System Error",
+                            f"Unexpected error during booking process: {str(e)}"
+                        )
                     finally:
                         await browser.close()
                 
