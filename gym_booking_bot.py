@@ -83,6 +83,9 @@ class GymBookingBot:
             
             if not smtp_user or not smtp_password or not notification_email:
                 print("⚠️  Email notification skipped - SMTP credentials not configured")
+                print(f"   SENDER_EMAIL: {'✓' if smtp_user else '✗'}")
+                print(f"   SENDER_PASSWORD: {'✓' if smtp_password else '✗'}")
+                print(f"   RECIPIENT_EMAIL: {'✓' if notification_email else '✗'}")
                 return
             
             # Format booking details
@@ -144,9 +147,13 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             True if login successful, False otherwise
         """
         try:
-            print(f"Navigating to {self.gym_url}...")
+            print(f"🌐 [{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] Navigating to {self.gym_url}...")
             await page.goto(self.gym_url)
             await page.wait_for_load_state('networkidle')
+            
+            # Check what user agent the site sees
+            user_agent = await page.evaluate('navigator.userAgent')
+            print(f"🤖 User Agent: {user_agent[:80]}...")
             
             # Hogarth-specific login selectors
             login_selectors = [
@@ -253,7 +260,7 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             True if booking successful, False otherwise
         """
         try:
-            print(f"Looking for {instructor} class at {time} on {target_date.strftime('%Y-%m-%d %A')}...")
+            print(f"🎯 [{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] Looking for {instructor} class at {time} on {target_date.strftime('%Y-%m-%d %A')}...")
             
             # Step 1: Try to navigate to Class Calendar page (stay within authenticated session)
             print("Looking for Classes navigation...")
@@ -369,9 +376,11 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             # Find class containers that have both instructor and time
             # Look for div.classDesktopWrapper containers (the main class container)
             class_containers = await page.query_selector_all('div.classDesktopWrapper')
+            print(f"🔍 Found {len(class_containers)} class containers to search")
             
             class_booked = False
-            for container in class_containers:
+            matching_containers = 0
+            for container_index, container in enumerate(class_containers):
                 try:
                     # Get all text content from this class container
                     container_text = await container.text_content()
@@ -383,7 +392,14 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                     has_time = time in container_text or time.replace(':', '') in container_text
                     
                     if has_instructor and has_time:
-                        print(f"✅ Found {instructor} class at {time}")
+                        matching_containers += 1
+                        print(f"✅ Found {instructor} class at {time} (container #{container_index + 1})")
+                        print(f"   Container text preview: {container_text[:100]}...")
+                        
+                        # If this is not the first matching container, log it
+                        if matching_containers > 1:
+                            print(f"⚠️  Multiple matching classes found! This is container #{matching_containers}")
+                            print(f"   You may need to be more specific in your schedule (e.g., add level/type)")
                         
                         # First, we need to make the overlay visible by clicking on the main class card
                         # The booking button is in the overlay which is hidden by default
@@ -437,20 +453,55 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                                     if booking_button:
                                         button_text = await booking_button.text_content()
                                         display_text = button_text.strip() if button_text else "Unknown"
-                                        print(f"✅ Found booking button: '{display_text}'")
+                                        print(f"🔍 [{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] Found booking button: '{display_text}'")
                                         
                                         # Check what type of button it is
                                         if button_text:
-                                            if "waiting" in button_text.lower():
-                                                print(f"❌ Class is full - only waiting list available")
+                                            button_lower = button_text.lower()
+                                            if "waiting" in button_lower:
+                                                print(f"❌ [{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] Class is full - only waiting list available")
+                                                print(f"   Button text: '{button_text.strip()}'")
+                                                print(f"   This might be the wrong class instance - check for multiple classes at this time")
+                                                
+                                                # Capture page content for debugging
+                                                try:
+                                                    page_url = page.url
+                                                    page_title = await page.title()
+                                                    print(f"🔍 Debug info:")
+                                                    print(f"   Current URL: {page_url}")
+                                                    print(f"   Page title: {page_title}")
+                                                    
+                                                    # Check if there are any availability indicators on the page
+                                                    availability_text = await page.evaluate('''
+                                                        () => {
+                                                            // Look for text that might indicate availability
+                                                            const text = document.body.innerText;
+                                                            const lines = text.split('\\n');
+                                                            return lines.filter(line => 
+                                                                line.includes('place') || 
+                                                                line.includes('space') || 
+                                                                line.includes('available') ||
+                                                                line.includes('full') ||
+                                                                /\\d+.*remaining/i.test(line) ||
+                                                                /\\d+.*left/i.test(line)
+                                                            ).slice(0, 5);
+                                                        }
+                                                    ''')
+                                                    if availability_text:
+                                                        print(f"   Availability indicators found: {availability_text}")
+                                                except Exception as e:
+                                                    print(f"   Could not capture debug info: {e}")
+                                                
                                                 return False
-                                            elif "full" in button_text.lower():
+                                            elif "full" in button_lower:
                                                 print(f"❌ Class is full")
+                                                print(f"   Button text: '{button_text.strip()}'")
                                                 return False
-                                            elif "book" in button_text.lower():
+                                            elif "book" in button_lower:
                                                 is_visible = await booking_button.is_visible()
                                                 if is_visible:
                                                     print(f"✅ Clicking booking button for {instructor} class")
+                                                    print(f"   Button text: '{button_text.strip()}'")
                                                     await booking_button.click()
                                                     await page.wait_for_load_state('networkidle')
                                                     class_booked = True
@@ -459,6 +510,7 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                                                     print(f"⚠️  Booking button not visible")
                                             else:
                                                 print(f"⚠️  Unknown button type: '{button_text.strip()}'")
+                                                print(f"   This might indicate an unexpected button state")
                                     else:
                                         print(f"❌ No booking button found in {instructor} class container")
                                     break
@@ -1310,7 +1362,10 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                     else:
                         browser = await p.chromium.launch(headless=self.headless)
                     
-                    context = await browser.new_context()
+                    # Create context with realistic user agent to avoid bot detection
+                    context = await browser.new_context(
+                        user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36'
+                    )
                     page = await context.new_page()
                     
                     try:
