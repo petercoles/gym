@@ -147,13 +147,9 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             True if login successful, False otherwise
         """
         try:
-            print(f"🌐 [{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] Navigating to {self.gym_url}...")
+            print(f"🌐 Navigating to {self.gym_url}...")
             await page.goto(self.gym_url)
             await page.wait_for_load_state('networkidle')
-            
-            # Check what user agent the site sees
-            user_agent = await page.evaluate('navigator.userAgent')
-            print(f"🤖 User Agent: {user_agent[:80]}...")
             
             # Hogarth-specific login selectors
             login_selectors = [
@@ -376,7 +372,7 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             # Find class containers that have both instructor and time
             # Look for div.classDesktopWrapper containers (the main class container)
             class_containers = await page.query_selector_all('div.classDesktopWrapper')
-            print(f"🔍 Found {len(class_containers)} class containers to search")
+
             
             class_booked = False
             matching_containers = 0
@@ -453,55 +449,21 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                                     if booking_button:
                                         button_text = await booking_button.text_content()
                                         display_text = button_text.strip() if button_text else "Unknown"
-                                        print(f"🔍 [{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] Found booking button: '{display_text}'")
+
                                         
                                         # Check what type of button it is
                                         if button_text:
                                             button_lower = button_text.lower()
                                             if "waiting" in button_lower:
-                                                print(f"❌ [{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] Class is full - only waiting list available")
-                                                print(f"   Button text: '{button_text.strip()}'")
-                                                print(f"   This might be the wrong class instance - check for multiple classes at this time")
-                                                
-                                                # Capture page content for debugging
-                                                try:
-                                                    page_url = page.url
-                                                    page_title = await page.title()
-                                                    print(f"🔍 Debug info:")
-                                                    print(f"   Current URL: {page_url}")
-                                                    print(f"   Page title: {page_title}")
-                                                    
-                                                    # Check if there are any availability indicators on the page
-                                                    availability_text = await page.evaluate('''
-                                                        () => {
-                                                            // Look for text that might indicate availability
-                                                            const text = document.body.innerText;
-                                                            const lines = text.split('\\n');
-                                                            return lines.filter(line => 
-                                                                line.includes('place') || 
-                                                                line.includes('space') || 
-                                                                line.includes('available') ||
-                                                                line.includes('full') ||
-                                                                /\\d+.*remaining/i.test(line) ||
-                                                                /\\d+.*left/i.test(line)
-                                                            ).slice(0, 5);
-                                                        }
-                                                    ''')
-                                                    if availability_text:
-                                                        print(f"   Availability indicators found: {availability_text}")
-                                                except Exception as e:
-                                                    print(f"   Could not capture debug info: {e}")
-                                                
+                                                print(f"❌ Class is full - only waiting list available")
                                                 return False
                                             elif "full" in button_lower:
                                                 print(f"❌ Class is full")
-                                                print(f"   Button text: '{button_text.strip()}'")
                                                 return False
                                             elif "book" in button_lower:
                                                 is_visible = await booking_button.is_visible()
                                                 if is_visible:
                                                     print(f"✅ Clicking booking button for {instructor} class")
-                                                    print(f"   Button text: '{button_text.strip()}'")
                                                     await booking_button.click()
                                                     await page.wait_for_load_state('networkidle')
                                                     class_booked = True
@@ -510,7 +472,6 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                                                     print(f"⚠️  Booking button not visible")
                                             else:
                                                 print(f"⚠️  Unknown button type: '{button_text.strip()}'")
-                                                print(f"   This might indicate an unexpected button state")
                                     else:
                                         print(f"❌ No booking button found in {instructor} class container")
                                     break
@@ -800,7 +761,7 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             
             if not date_selected:
                 print("⚠️  Could not set date - will use today's slots (may be limited)")
-                print("🔄 Continuing with available slots for current date")
+
             
             # Select duration
             print(f"Selecting duration: {duration} minutes...")
@@ -946,11 +907,8 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                     
                     # Always try the booking button approach as it seems more reliable
                     booking_buttons = await lane_div.query_selector_all('a.bookButton')
-                    print(f"🔍 Found {len(booking_buttons)} booking buttons in Lane {lane_num}")
-                    
                     # Use booking buttons approach if we have them
                     if len(booking_buttons) > 0:
-                        print(f"🔄 Using booking buttons approach for Lane {lane_num}")
                         for button in booking_buttons:
                             try:
                                 # Get the button text content directly
@@ -964,10 +922,9 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                                 
                                 if time_match_obj:
                                     extracted_time = time_match_obj.group(1)
-                                    print(f"🕐 Lane {lane_num} extracted time: '{extracted_time}' (looking for '{time}')")
                                     
                                     if extracted_time == time:
-                                        print(f"✅ Found {time} slot in Lane {lane_num}: '{extracted_time}'")
+                                        print(f"✅ Found {time} slot in Lane {lane_num}")
                                         await button.click()
                                         slot_booked = True
                                         break
@@ -1066,8 +1023,7 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                             try:
                                 success_element = await page.wait_for_selector(success_selector, timeout=5000)
                                 if success_element:
-                                    success_text = await success_element.text_content()
-                                    print(f"🎉 Swim lane booking successful! {success_text}")
+                                    print(f"🎉 Swim lane booking successful!")
                                     return True
                             except:
                                 continue
