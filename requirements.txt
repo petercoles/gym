@@ -1,4 +1,5 @@
 # Gym Booking Bot Requirements - Simplified Cron Job
+
 # Core dependencies for Playwright browser automation
 playwright>=1.40.0
 
