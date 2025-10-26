@@ -71,6 +71,124 @@ class GymBookingBot:
             print("☁️  Running on Render - using Playwright's bundled Chromium")
             return False, None
 
+    async def _navigate_datepicker_to_date(self, page: Page, calendar_selector: str, target_date: datetime) -> bool:
+        """Navigate the UIkit datepicker to the desired month and click the target day."""
+        target_month_start = target_date.replace(day=1)
+        target_iso = target_date.strftime('%Y-%m-%d')
+        day_strings = {str(target_date.day), target_date.strftime('%d').lstrip('0')}
+
+        for _ in range(12):  # Prevent infinite loops
+            calendars = await page.query_selector_all(calendar_selector)
+            if not calendars:
+                return False
+
+            calendar = calendars[-1]  # Use the most recent calendar instance
+            title_text = await self._get_datepicker_title(calendar)
+            displayed_month = self._parse_month_year_title(title_text)
+
+            if displayed_month is None:
+                # Try clicking the day directly as a fallback
+                return await self._click_datepicker_day(calendar, target_iso, day_strings)
+
+            if displayed_month == target_month_start:
+                return await self._click_datepicker_day(calendar, target_iso, day_strings)
+
+            if displayed_month < target_month_start:
+                if not await self._click_datepicker_nav(calendar, ['.uk-datepicker-next', '.ui-datepicker-next', '[data-uk-datepicker-next]']):
+                    return False
+            else:
+                if not await self._click_datepicker_nav(calendar, ['.uk-datepicker-prev', '.ui-datepicker-prev', '[data-uk-datepicker-previous]', '.uk-datepicker-previous']):
+                    return False
+
+            await page.wait_for_timeout(400)
+
+        return False
+
+    async def _get_datepicker_title(self, calendar) -> str:
+        """Extract the month/year title text from the datepicker."""
+        title_selectors = [
+            '.uk-datepicker-nav .uk-datepicker-title',
+            '.uk-datepicker-title',
+            '.ui-datepicker-title'
+        ]
+        for selector in title_selectors:
+            try:
+                element = await calendar.query_selector(selector)
+                if element:
+                    text = await element.text_content()
+                    if text:
+                        return text.strip()
+            except Exception:
+                continue
+        return ""
+
+    def _parse_month_year_title(self, text: str):
+        """Parse strings like 'November 2025' into a datetime at the first of the month."""
+        if not text:
+            return None
+
+        cleaned = re.sub(r'\s+', ' ', text.strip())
+        for fmt in ("%B %Y", "%b %Y"):
+            try:
+                parsed = datetime.strptime(cleaned, fmt)
+                return parsed.replace(day=1)
+            except ValueError:
+                continue
+        return None
+
+    async def _click_datepicker_nav(self, calendar, selectors: list[str]) -> bool:
+        """Click the next/previous navigation button."""
+        for selector in selectors:
+            try:
+                button = await calendar.query_selector(selector)
+                if button:
+                    await button.click()
+                    return True
+            except Exception:
+                continue
+        return False
+
+    async def _click_datepicker_day(self, calendar, iso_target: str, day_strings: set[str]) -> bool:
+        """Click the day cell matching the target date."""
+        # Prefer exact data-date matches if available
+        for selector in [
+            f'[data-date="{iso_target}"]',
+            f'[data-date="{iso_target} 00:00:00"]',
+            f'[data-date="{iso_target}T00:00:00"]'
+        ]:
+            try:
+                element = await calendar.query_selector(selector)
+                if element:
+                    await element.click()
+                    return True
+            except Exception:
+                continue
+
+        # Fallback: match by visible text while avoiding disabled/off-month cells
+        try:
+            cells = await calendar.query_selector_all('td')
+        except Exception:
+            cells = []
+
+        for cell in cells:
+            try:
+                classes = (await cell.get_attribute('class') or '').lower()
+                if any(token in classes for token in ['off', 'disabled', 'uk-datepicker-empty', 'uk-datepicker-outside']):
+                    continue
+
+                text = (await cell.text_content() or '').strip()
+                if text in day_strings:
+                    clickable = await cell.query_selector('a, button')
+                    if clickable:
+                        await clickable.click()
+                    else:
+                        await cell.click()
+                    return True
+            except Exception:
+                continue
+
+        return False
+
     def _send_booking_failure_email(self, booking_details: dict, failure_reason: str, error_details: str = ""):
         """Send email notification when a booking fails"""
         try:
@@ -686,7 +804,7 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                     else:
                         print("🗓️  Attempting to set date using datepicker widget...")
                         
-                        # Method 1: Try clicking the input to open the datepicker
+                        # Method 1: Use the datepicker controls to navigate to the target month/day
                         try:
                             await date_input.click()
                             await page.wait_for_timeout(1000)  # Wait for datepicker to open
@@ -702,25 +820,24 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                             calendar_found = False
                             for cal_selector in calendar_selectors:
                                 try:
-                                    calendar = await page.wait_for_selector(cal_selector, timeout=2000)
-                                    if calendar:
+                                    calendars = await page.query_selector_all(cal_selector)
+                                    if calendars:
                                         print(f"✅ Found datepicker calendar: {cal_selector}")
                                         calendar_found = True
-                                        
-                                        # Try to find and click the target date
-                                        target_day = target_date.day
-                                        date_buttons = await page.query_selector_all(f'{cal_selector} button, {cal_selector} a, {cal_selector} .uk-datepicker-table td')
-                                        
-                                        for button in date_buttons:
-                                            button_text = await button.text_content()
-                                            if button_text and button_text.strip() == str(target_day):
-                                                print(f"🎯 Clicking date: {target_day}")
-                                                await button.click()
-                                                await page.wait_for_timeout(1000)
-                                                date_selected = True
-                                                break
+                                        navigation_success = await self._navigate_datepicker_to_date(page, cal_selector, target_date)
+                                        await page.wait_for_timeout(800)
+                                        new_value = await date_input.get_attribute('value')
+                                        if navigation_success and new_value == target_date_str:
+                                            print(f"✅ Date selected via datepicker: {new_value}")
+                                            date_selected = True
+                                        else:
+                                            if navigation_success:
+                                                print(f"⚠️  Datepicker navigation completed but value is '{new_value}'")
+                                            else:
+                                                print("⚠️  Could not navigate datepicker to target month/day")
                                         break
-                                except:
+                                except Exception as nav_error:
+                                    print(f"⚠️  Datepicker selector error for {cal_selector}: {nav_error}")
                                     continue
                             
                             if not calendar_found:
@@ -760,7 +877,8 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 print(f"⚠️  Date selector error: {e}")
             
             if not date_selected:
-                print("⚠️  Could not set date - will use today's slots (may be limited)")
+                print("❌ Unable to set swim booking date to target day. Aborting booking attempt.")
+                return False
 
             
             # Select duration
