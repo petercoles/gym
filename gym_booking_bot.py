@@ -74,10 +74,8 @@ class GymBookingBot:
     async def _navigate_datepicker_to_date(self, page: Page, calendar_selector: str, target_date: datetime) -> bool:
         """Navigate the UIkit datepicker to the desired month and click the target day."""
         target_month_start = target_date.replace(day=1)
-        target_iso = target_date.strftime('%Y-%m-%d')
-        day_strings = {str(target_date.day), target_date.strftime('%d').lstrip('0')}
 
-        for _ in range(12):  # Prevent infinite loops
+        for attempt in range(12):  # Prevent infinite loops
             calendars = await page.query_selector_all(calendar_selector)
             if not calendars:
                 return False
@@ -85,18 +83,24 @@ class GymBookingBot:
             calendar = calendars[-1]  # Use the most recent calendar instance
             title_text = await self._get_datepicker_title(calendar)
             displayed_month = self._parse_month_year_title(title_text)
+            if title_text:
+                print(f"📆 Datepicker shows: '{title_text}' (attempt {attempt + 1})")
+            else:
+                print(f"📆 Datepicker title not found (attempt {attempt + 1})")
 
             if displayed_month is None:
                 # Try clicking the day directly as a fallback
-                return await self._click_datepicker_day(calendar, target_iso, day_strings)
+                return await self._click_datepicker_day(calendar, target_date)
 
             if displayed_month == target_month_start:
-                return await self._click_datepicker_day(calendar, target_iso, day_strings)
+                return await self._click_datepicker_day(calendar, target_date)
 
             if displayed_month < target_month_start:
+                print("➡️  Navigating forward a month...")
                 if not await self._click_datepicker_nav(calendar, ['.uk-datepicker-next', '.ui-datepicker-next', '[data-uk-datepicker-next]']):
                     return False
             else:
+                print("⬅️  Navigating back a month...")
                 if not await self._click_datepicker_nav(calendar, ['.uk-datepicker-prev', '.ui-datepicker-prev', '[data-uk-datepicker-previous]', '.uk-datepicker-previous']):
                     return False
 
@@ -109,7 +113,8 @@ class GymBookingBot:
         title_selectors = [
             '.uk-datepicker-nav .uk-datepicker-title',
             '.uk-datepicker-title',
-            '.ui-datepicker-title'
+            '.ui-datepicker-title',
+            '.uk-datepicker-heading'
         ]
         for selector in title_selectors:
             try:
@@ -142,24 +147,56 @@ class GymBookingBot:
             try:
                 button = await calendar.query_selector(selector)
                 if button:
-                    await button.click()
+                    try:
+                        await button.scroll_into_view_if_needed()
+                    except Exception:
+                        pass
+                    try:
+                        await button.click(force=True)
+                    except Exception:
+                        await button.click()
                     return True
             except Exception:
                 continue
         return False
 
-    async def _click_datepicker_day(self, calendar, iso_target: str, day_strings: set[str]) -> bool:
+    async def _click_datepicker_day(self, calendar, target_date: datetime) -> bool:
         """Click the day cell matching the target date."""
+        iso_target = target_date.strftime('%Y-%m-%d')
+        day_strings = {str(target_date.day), target_date.strftime('%d')}
+        class_blocklist = ('disabled', 'empty', 'off', 'out', 'outside', 'muted')
+
         # Prefer exact data-date matches if available
-        for selector in [
+        data_selectors = [
             f'[data-date="{iso_target}"]',
             f'[data-date="{iso_target} 00:00:00"]',
-            f'[data-date="{iso_target}T00:00:00"]'
-        ]:
+            f'[data-date="{iso_target}T00:00:00"]',
+            f'[data-date^="{iso_target}T"]',
+            f'[data-date^="{iso_target} "]',
+            f'[data-date^="{iso_target}"]',
+        ]
+        for selector in data_selectors:
             try:
-                element = await calendar.query_selector(selector)
-                if element:
-                    await element.click()
+                elements = await calendar.query_selector_all(selector)
+                for element in elements:
+                    if not element:
+                        continue
+                    classes = (await element.get_attribute('class') or '').lower()
+                    if any(token in classes for token in class_blocklist):
+                        continue
+                    try:
+                        await element.scroll_into_view_if_needed()
+                    except Exception:
+                        pass
+                    try:
+                        data_value = await element.get_attribute('data-date')
+                    except Exception:
+                        data_value = None
+                    print(f"🗓️  Selecting day using data-date match: {data_value or 'unknown'}")
+                    try:
+                        await element.click(force=True)
+                    except Exception:
+                        await element.click()
                     return True
             except Exception:
                 continue
@@ -172,22 +209,65 @@ class GymBookingBot:
 
         for cell in cells:
             try:
-                classes = (await cell.get_attribute('class') or '').lower()
-                if any(token in classes for token in ['off', 'disabled', 'uk-datepicker-empty', 'uk-datepicker-outside']):
+                cell_classes = (await cell.get_attribute('class') or '').lower()
+                clickable = await cell.query_selector('a, button')
+                clickable_classes = (await clickable.get_attribute('class') or '').lower() if clickable else ''
+                combined_classes = f"{cell_classes} {clickable_classes}"
+                if any(token in combined_classes for token in class_blocklist):
                     continue
 
-                text = (await cell.text_content() or '').strip()
+                data_date = ''
+                if clickable:
+                    data_date = (await clickable.get_attribute('data-date')) or ''
+                if not data_date:
+                    data_date = (await cell.get_attribute('data-date')) or ''
+
+                if data_date and not data_date.startswith(iso_target):
+                    continue
+
+                text_source = clickable if clickable else cell
+                text = (await text_source.text_content() or '').strip()
                 if text in day_strings:
-                    clickable = await cell.query_selector('a, button')
                     if clickable:
-                        await clickable.click()
+                        try:
+                            await clickable.scroll_into_view_if_needed()
+                        except Exception:
+                            pass
+                        print(f"🗓️  Selecting day by visible text: {text}")
+                        try:
+                            await clickable.click(force=True)
+                        except Exception:
+                            await clickable.click()
                     else:
-                        await cell.click()
+                        try:
+                            await cell.scroll_into_view_if_needed()
+                        except Exception:
+                            pass
+                        print(f"🗓️  Selecting day by cell text: {text}")
+                        try:
+                            await cell.click(force=True)
+                        except Exception:
+                            await cell.click()
                     return True
             except Exception:
                 continue
 
         return False
+
+    async def _get_input_value(self, element) -> str:
+        """Safely get the live value of an input element."""
+        if not element:
+            return ""
+        try:
+            return await element.input_value()
+        except Exception:
+            try:
+                return await element.evaluate("(el) => el.value")
+            except Exception:
+                try:
+                    return await element.get_attribute('value') or ""
+                except Exception:
+                    return ""
 
     def _send_booking_failure_email(self, booking_details: dict, failure_reason: str, error_details: str = ""):
         """Send email notification when a booking fails"""
@@ -795,7 +875,7 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 date_input = await page.wait_for_selector('input#ctl00_mainContent_SessionDatePicker', timeout=5000)
                 if date_input:
                     # Check current value
-                    current_value = await date_input.get_attribute('value')
+                    current_value = await self._get_input_value(date_input)
                     print(f"📅 Current date value: {current_value}, Target: {target_date_str}")
                     
                     if current_value == target_date_str:
@@ -825,16 +905,21 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                                         print(f"✅ Found datepicker calendar: {cal_selector}")
                                         calendar_found = True
                                         navigation_success = await self._navigate_datepicker_to_date(page, cal_selector, target_date)
-                                        await page.wait_for_timeout(800)
-                                        new_value = await date_input.get_attribute('value')
-                                        if navigation_success and new_value == target_date_str:
-                                            print(f"✅ Date selected via datepicker: {new_value}")
-                                            date_selected = True
+                                        if navigation_success:
+                                            # Wait for the input value to update
+                                            last_value = current_value
+                                            for _ in range(12):
+                                                new_value = await self._get_input_value(date_input)
+                                                if new_value == target_date_str:
+                                                    print(f"✅ Date selected via datepicker: {new_value}")
+                                                    date_selected = True
+                                                    break
+                                                last_value = new_value
+                                                await page.wait_for_timeout(250)
+                                            if not date_selected:
+                                                print(f"⚠️  Datepicker navigation completed but value is '{last_value}'")
                                         else:
-                                            if navigation_success:
-                                                print(f"⚠️  Datepicker navigation completed but value is '{new_value}'")
-                                            else:
-                                                print("⚠️  Could not navigate datepicker to target month/day")
+                                            print("⚠️  Could not navigate datepicker to target month/day")
                                         break
                                 except Exception as nav_error:
                                     print(f"⚠️  Datepicker selector error for {cal_selector}: {nav_error}")
@@ -844,34 +929,6 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                                 print("⚠️  Could not find datepicker calendar")
                         except Exception as e:
                             print(f"⚠️  Could not open datepicker: {e}")
-                        
-                        # Method 2: Try JavaScript to set the value and trigger events
-                        if not date_selected:
-                            try:
-                                print("🔧 Trying JavaScript method to set date...")
-                                await page.evaluate(f"""
-                                    const input = document.querySelector('#ctl00_mainContent_SessionDatePicker');
-                                    if (input) {{
-                                        input.value = '{target_date_str}';
-                                        input.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                                        input.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                                        // Trigger the ASP.NET postback
-                                        if (typeof __doPostBack === 'function') {{
-                                            __doPostBack('ctl00$mainContent$SessionDatePicker', '');
-                                        }}
-                                    }}
-                                """)
-                                await page.wait_for_timeout(2000)  # Wait for postback
-                                
-                                # Check if the value was set
-                                new_value = await date_input.get_attribute('value')
-                                if new_value == target_date_str:
-                                    print(f"✅ Date set via JavaScript: {new_value}")
-                                    date_selected = True
-                                else:
-                                    print(f"⚠️  JavaScript method didn't work. Value: {new_value}")
-                            except Exception as e:
-                                print(f"⚠️  JavaScript method failed: {e}")
                         
             except Exception as e:
                 print(f"⚠️  Date selector error: {e}")
