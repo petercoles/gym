@@ -74,6 +74,7 @@ class GymBookingBot:
     async def _navigate_datepicker_to_date(self, page: Page, calendar_selector: str, target_date: datetime) -> bool:
         """Navigate the UIkit datepicker to the desired month and click the target day."""
         target_month_start = target_date.replace(day=1)
+        target_month_key = (target_month_start.year, target_month_start.month)
 
         for attempt in range(12):  # Prevent infinite loops
             calendars = await page.query_selector_all(calendar_selector)
@@ -83,19 +84,23 @@ class GymBookingBot:
             calendar = calendars[-1]  # Use the most recent calendar instance
             title_text = await self._get_datepicker_title(calendar)
             displayed_month = self._parse_month_year_title(title_text)
+            displayed_month_key = (
+                (displayed_month.year, displayed_month.month)
+                if displayed_month is not None else None
+            )
             if title_text:
                 print(f"📆 Datepicker shows: '{title_text}' (attempt {attempt + 1})")
             else:
                 print(f"📆 Datepicker title not found (attempt {attempt + 1})")
 
-            if displayed_month is None:
+            if displayed_month_key is None:
                 # Try clicking the day directly as a fallback
                 return await self._click_datepicker_day(calendar, target_date)
 
-            if displayed_month == target_month_start:
+            if displayed_month_key == target_month_key:
                 return await self._click_datepicker_day(calendar, target_date)
 
-            if displayed_month < target_month_start:
+            if displayed_month_key < target_month_key:
                 print("➡️  Navigating forward a month...")
                 if not await self._click_datepicker_nav(calendar, ['.uk-datepicker-next', '.ui-datepicker-next', '[data-uk-datepicker-next]']):
                     return False
