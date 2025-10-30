@@ -35,6 +35,15 @@ def _compute_target_date_from_offset(days_ahead: int) -> datetime:
     base_date = datetime.now().date() + timedelta(days=days_ahead)
     return datetime.combine(base_date, datetime.min.time())
 
+def _compute_next_occurrence_of_day(day_name: str) -> datetime:
+    """Return the next calendar date matching the provided day-of-week."""
+    normalized_day = _normalize_day(day_name)
+    today = datetime.now().date()
+    target_weekday = DAY_NAME_TO_INDEX[normalized_day]
+    delta_days = (target_weekday - today.weekday()) % 7
+    base_date = today + timedelta(days=delta_days)
+    return datetime.combine(base_date, datetime.min.time())
+
 def _parse_env_int(name: str, default: int) -> int:
     """Parse an integer from environment variables with a fallback."""
     try:
@@ -179,7 +188,20 @@ async def test_class_booking(
     day_name = day_name or os.getenv('TEST_CLASS_DAY') or "saturday"
     time_str = time_str or os.getenv('TEST_CLASS_TIME') or "08:15"
     instructor = instructor or os.getenv('TEST_CLASS_INSTRUCTOR') or "Mari"
-    days_ahead_value = days_ahead if days_ahead is not None else _parse_env_int('TEST_CLASS_DAYS_AHEAD', 3)
+    
+    try:
+        normalized_day = _normalize_day(day_name)
+    except ValueError as exc:
+        print(f"❌ {exc}")
+        return False
+
+    env_days_ahead_raw = os.getenv('TEST_CLASS_DAYS_AHEAD')
+    if days_ahead is not None:
+        days_ahead_value = days_ahead
+    elif env_days_ahead_raw is not None and env_days_ahead_raw.strip() != "":
+        days_ahead_value = _parse_env_int('TEST_CLASS_DAYS_AHEAD', 0)
+    else:
+        days_ahead_value = None
 
     if target_date_override:
         try:
@@ -187,14 +209,10 @@ async def test_class_booking(
         except ValueError:
             print(f"❌ Invalid target date override '{target_date_override}'. Expected YYYY-MM-DD.")
             return False
-    else:
+    elif days_ahead_value is not None:
         target_date = _compute_target_date_from_offset(days_ahead_value)
-
-    try:
-        normalized_day = _normalize_day(day_name)
-    except ValueError as exc:
-        print(f"❌ {exc}")
-        return False
+    else:
+        target_date = _compute_next_occurrence_of_day(normalized_day)
 
     actual_day = target_date.strftime('%A').lower()
     days_out = (target_date.date() - datetime.now().date()).days
@@ -202,7 +220,8 @@ async def test_class_booking(
         print(f"⚠️  Target date {target_date.strftime('%Y-%m-%d')} is a {actual_day.title()}, not {normalized_day.title()}.")
         print("   Adjust TEST_CLASS_DAYS_AHEAD or use the custom option to enter an exact date.")
 
-    print(f"➡️  Class test is {days_out} days ahead (configured {days_ahead_value} days).")
+    configured_label = f"{days_ahead_value} days" if days_ahead_value is not None else f"next {normalized_day.title()}"
+    print(f"➡️  Class test is {days_out} days ahead (configured {configured_label}).")
     
     print(f"📅 Target date: {target_date.strftime('%Y-%m-%d (%A)')}")
     
