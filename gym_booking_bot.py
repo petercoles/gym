@@ -421,25 +421,18 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             # Wait for login to complete
             await page.wait_for_load_state('networkidle')
             
-            # Check if login was successful by looking for success indicators
-            success_indicators = [
-                'h1:has-text("Members Area")',
-            ]
+            # Check if login was successful by looking for a known post-login element
+            success_selector = 'h1:has-text("Members Area")'
+            try:
+                element = await page.wait_for_selector(success_selector, timeout=5000)
+                if element:
+                    print(f"✅ Login successful for {self.user_name}")
+                    return True
+            except Exception:
+                pass
             
-            for indicator in success_indicators:
-                try:
-                    element = await page.wait_for_selector(indicator, timeout=5000)
-                    if element:
-                        print(f"✅ Login successful for {self.user_name}")
-                        return True
-                except:
-                    continue
-            
-            print(f"✅ Login successful for {self.user_name} (assumed)")
-            
-
-            
-            return True  # Assume success if we can't verify
+            print(f"⚠️  Login success indicator not found for {self.user_name}, assuming success")
+            return True  # Return True to keep behaviour compatible with existing callers
                 
         except Exception as e:
             print(f"❌ Login error for {self.user_name}: {e}")
