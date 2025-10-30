@@ -953,20 +953,58 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             for selector in duration_selectors:
                 try:
                     duration_select = await page.wait_for_selector(selector, timeout=3000)
-                    if duration_select:
-                        options = await page.query_selector_all(f'{selector} option')
-                        for option in options:
-                            option_text = await option.text_content()
-                            option_value = await option.get_attribute('value')
-                            if option_text and str(duration) in option_text:
-                                print(f"✅ Selecting duration: {option_text}")
-                                await duration_select.select_option(value=option_value)
-                                await page.wait_for_timeout(1000)  # Wait for onchange event
+                    if not duration_select:
+                        continue
+
+                    options = await page.query_selector_all(f'{selector} option')
+                    for option in options:
+                        option_text_raw = await option.text_content()
+                        option_text = (option_text_raw or '').strip()
+                        if not option_text:
+                            continue
+
+                        text_normalised = option_text.lower().replace("mins", "min")
+                        target_token = f"{duration} min"
+                        if target_token not in text_normalised:
+                            continue
+
+                        option_value_raw = await option.get_attribute('value')
+                        option_value = (option_value_raw or '').strip()
+                        print(f"✅ Selecting duration: {option_text}")
+
+                        selection_applied = False
+                        try:
+                            await duration_select.select_option(label=option_text)
+                            selection_applied = True
+                        except Exception as label_err:
+                            print(f"⚠️  select_option(label=...) failed: {label_err}")
+                            if option_value:
+                                try:
+                                    await duration_select.select_option(value=option_value)
+                                    selection_applied = True
+                                except Exception as value_err:
+                                    print(f"⚠️  select_option(value=...) failed: {value_err}")
+                            if not selection_applied:
+                                try:
+                                    await option.click()
+                                    selection_applied = True
+                                except Exception as click_err:
+                                    print(f"⚠️  Direct option click also failed: {click_err}")
+
+                        if selection_applied:
+                            await page.wait_for_timeout(300)
+                            try:
+                                selected_label = (await duration_select.evaluate("(el) => el.options[el.selectedIndex]?.text || ''") or '').strip()
+                            except Exception:
+                                selected_label = ''
+                            if selected_label and target_token in selected_label.lower().replace("mins", "min"):
                                 duration_selected = True
                                 break
-                        if duration_selected:
-                            break
-                except:
+
+                    if duration_selected:
+                        break
+                except Exception as e:
+                    print(f"⚠️  Duration selection error for {selector}: {e}")
                     continue
             
             if not duration_selected:
