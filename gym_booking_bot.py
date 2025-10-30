@@ -572,9 +572,42 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             # Step 4: Look for class with matching instructor and time
             print(f"Looking for {instructor} at {time}...")
             
-            # Find class containers that have both instructor and time
-            # Look for div.classDesktopWrapper containers (the main class container)
-            class_containers = await page.query_selector_all('div.classDesktopWrapper')
+            # Find class containers that have both instructor and time, scoped to the located day section
+            class_containers = []
+            day_container_handle = None
+            try:
+                day_container_handle = await day_section.evaluate_handle(
+                    """(node) => {
+                        const scopes = [
+                            '.classCalendarDay',
+                            '.classDayWrapper',
+                            '.classWeekDay',
+                            '.dayWrap',
+                            '.uk-accordion-content',
+                            '.uk-panel',
+                            '.day-wrapper',
+                            '.classDay'
+                        ];
+                        for (const selector of scopes) {
+                            const match = node.closest(selector);
+                            if (match) {
+                                return match;
+                            }
+                        }
+                        return node;
+                    }"""
+                )
+            except Exception:
+                day_container_handle = None
+
+            day_container = day_container_handle.as_element() if day_container_handle else None
+            if day_container:
+                class_containers = await day_container.query_selector_all('div.classDesktopWrapper')
+
+            if not class_containers:
+                # Fallback to global search if we couldn't scope the day section
+                print("⚠️  Could not scope class search to day section, falling back to full page scan")
+                class_containers = await page.query_selector_all('div.classDesktopWrapper')
 
             
             class_booked = False
