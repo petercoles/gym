@@ -509,61 +509,72 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 
             print("✅ Successfully reached class calendar page")
             
-            # Step 2: Click "Next" to advance to the bookable week (8 days ahead)
-            print("Clicking Next to advance to bookable week...")
-            next_selectors = [
-                'a#ctl00_mainContent_ucCalendar_lnkNextWeek',
-                'a:has-text("Next")',
-                '*:has-text("Next")'
-            ]
-            
-            next_clicked = False
-            for selector in next_selectors:
-                try:
-                    next_button = await page.wait_for_selector(selector, timeout=5000)
-                    if next_button:
-                        print(f"✅ Found Next button: {selector}")
-                        await next_button.click()
-                        await page.wait_for_load_state('networkidle')
-                        next_clicked = True
-                        break
-                except:
-                    continue
-            
-            if not next_clicked:
-                print("❌ Could not find Next button to advance to bookable week")
-                return False
-            
-            # Step 3: Find target date section
-            print(f"Looking for {target_date.strftime('%A')} section...")
-            
-
-            
-            # Find the day section for our target date
+            # Prepare selectors for locating the target day
             day_name = target_date.strftime('%A')  # e.g., "Friday"
             day_header = target_date.strftime('%a %d %b')  # e.g., "Fri 24 Oct"
             day_selectors = [
-                f'*:has-text("{day_header}")',  # Try full format first: "Fri 24 Oct"
+                f'*:has-text("{day_header}")',  # Full format first: "Fri 24 Oct"
                 f'h2:has-text("{day_header}")',
                 f'h3:has-text("{day_header}")',
                 f'h1:has-text("{day_header}")',
                 f'td:has-text("{day_header}")',
                 f'th:has-text("{day_header}")',
                 f'div:has-text("{day_header}")',
-                f'*:has-text("{day_name[:3]}")',  # Fallback to "Fri"
-                f'*:has-text("{day_name}")',  # Fallback to "Friday"
+                f'*:has-text("{day_name[:3]}")',  # Fallback "Fri"
+                f'*:has-text("{day_name}")',  # Fallback "Friday"
             ]
             
+            # Step 2: Click "Next" to advance to the bookable week if needed
             day_section = None
-            print(f"Looking for day section: '{day_header}' (or fallbacks)")
             for selector in day_selectors:
                 try:
-                    day_section = await page.wait_for_selector(selector, timeout=3000)
-                    if day_section:
-                        print(f"✅ Found {day_name} section with: {selector}")
+                    candidate = await page.query_selector(selector)
+                    if candidate:
+                        day_section = candidate
+                        print(f"✅ Target day already visible on current calendar with selector: {selector}")
                         break
-                except:
+                except Exception:
                     continue
+            
+            if not day_section:
+                print("Clicking Next to advance to bookable week...")
+                next_selectors = [
+                    'a#ctl00_mainContent_ucCalendar_lnkNextWeek',
+                    'a:has-text("Next")',
+                    '*:has-text("Next")'
+                ]
+                
+                next_clicked = False
+                for selector in next_selectors:
+                    try:
+                        next_button = await page.wait_for_selector(selector, timeout=5000)
+                        if next_button:
+                            print(f"✅ Found Next button: {selector}")
+                            await next_button.click()
+                            await page.wait_for_load_state('networkidle')
+                            next_clicked = True
+                            break
+                    except:
+                        continue
+                
+                if not next_clicked:
+                    print("❌ Could not find Next button to advance to bookable week")
+                    return False
+            
+            # Step 3: Find target date section
+            print(f"Looking for {target_date.strftime('%A')} section...")
+            if day_section:
+                print(f"➡️  Reusing existing handle for {day_header}")
+            else:
+                print(f"Looking for day section: '{day_header}' (or fallbacks)")
+                for selector in day_selectors:
+                    try:
+                        day_section = await page.wait_for_selector(selector, timeout=3000)
+                        if day_section:
+                            print(f"✅ Found {day_name} section with: {selector}")
+                            break
+                    except:
+                        continue
             
             if not day_section:
                 print(f"❌ Could not find {day_name} section")
@@ -681,8 +692,22 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                                     print(f"✅ Found updated container for {instructor} at {time}")
                                     
                                     # Look for booking button within this specific container
-                                    booking_button = await updated_container.query_selector('a.bookClassButton')
+                                    booking_button = None
+                                    try:
+                                        booking_button = await updated_container.wait_for_selector(
+                                            'a.bookClassButton',
+                                            state='visible',
+                                            timeout=5000
+                                        )
+                                    except Exception:
+                                        booking_button = await updated_container.query_selector('a.bookClassButton')
+
                                     if booking_button:
+                                        try:
+                                            await booking_button.scroll_into_view_if_needed()
+                                        except Exception:
+                                            pass
+
                                         button_text = await booking_button.text_content()
                                         display_text = button_text.strip() if button_text else "Unknown"
 
