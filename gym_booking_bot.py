@@ -113,6 +113,89 @@ class GymBookingBot:
 
         return False
 
+    async def _container_matches_day(self, container, target_texts: list[str]) -> tuple[bool, str]:
+        """Check whether a class container belongs to the requested day using lightweight DOM inspection."""
+        if not container:
+            return False, ""
+
+        script = """(node, targets) => {
+            const response = { match: false, label: '' };
+            if (!node) {
+                return response;
+            }
+
+            const dayWrapper = node.closest('.classCalendarDay, .classDayWrapper, .classWeekDay, .dayWrap, .uk-accordion-content, .uk-panel, .day-wrapper, .classDay');
+            const labelSelectors = [
+                '.classDayTitle',
+                '.classDayHeader',
+                '.classDayName',
+                '.dayTitle',
+                '.uk-accordion-title',
+                'header',
+                'h1',
+                'h2',
+                'h3'
+            ];
+            const attrCandidates = [
+                'data-date',
+                'data-day',
+                'data-classdate',
+                'data-class-date',
+                'data-class-date-iso'
+            ];
+
+            const wrapper = dayWrapper || node;
+            let label = '';
+
+            for (const selector of labelSelectors) {
+                const headerEl = wrapper.querySelector(selector);
+                if (headerEl && headerEl.textContent) {
+                    label = headerEl.textContent;
+                    break;
+                }
+            }
+
+            if (!label) {
+                for (const attr of attrCandidates) {
+                    const value = wrapper.getAttribute(attr) || node.getAttribute(attr);
+                    if (value) {
+                        label = value;
+                        break;
+                    }
+                }
+            }
+
+            if (!label && wrapper.textContent) {
+                label = wrapper.textContent;
+            }
+
+            const normalizedLabel = (label || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+
+            for (const target of targets || []) {
+                const normalizedTarget = String(target || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+                if (normalizedTarget && normalizedLabel.includes(normalizedTarget)) {
+                    response.match = true;
+                    response.label = label ? label.trim() : '';
+                    return response;
+                }
+            }
+
+            response.label = label ? label.trim() : '';
+            return response;
+        }"""
+
+        try:
+            result = await container.evaluate(script, target_texts)
+        except Exception:
+            return False, ""
+
+        if not isinstance(result, dict):
+            return False, ""
+
+        matches = bool(result.get('match'))
+        label = (result.get('label') or "").strip()
+        return matches, label
+
     async def _get_datepicker_title(self, calendar) -> str:
         """Extract the month/year title text from the datepicker."""
         title_selectors = [
@@ -613,10 +696,43 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 print("⚠️  Could not scope class search to day section, falling back to full page scan")
                 class_containers = await page.query_selector_all('div.classDesktopWrapper')
 
-            
+            # Collect metadata to filter class containers down to the requested day
+            container_contexts = []
+            filtered_contexts = []
+            skipped_contexts = []
+
+            day_tokens = [
+                day_header,
+                target_date.strftime('%Y-%m-%d'),
+                target_date.strftime('%d %b'),
+                target_date.strftime('%d %B'),
+                target_date.strftime('%d/%m'),
+                target_date.strftime('%m/%d'),
+                day_name,
+                day_name[:3],
+                str(target_date.day)
+            ]
+
+            for original_index, container in enumerate(class_containers, 1):
+                matches_day, label = await self._container_matches_day(container, day_tokens)
+                context_entry = (original_index, container, label, matches_day)
+                container_contexts.append(context_entry)
+                if matches_day:
+                    filtered_contexts.append(context_entry)
+                else:
+                    skipped_contexts.append(context_entry)
+
+            if filtered_contexts:
+                class_contexts = filtered_contexts
+                print(f"✅ Scoped search to {len(filtered_contexts)} class container(s) matching {day_header}")
+            else:
+                class_contexts = container_contexts
+                if skipped_contexts:
+                    print("⚠️  Day-level filtering did not match any containers; continuing with unfiltered list")
+
             class_booked = False
             matching_containers = 0
-            for container_index, container in enumerate(class_containers):
+            for original_index, container, label, _ in class_contexts:
                 try:
                     # Get all text content from this class container
                     container_text = await container.text_content()
@@ -629,7 +745,9 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                     
                     if has_instructor and has_time:
                         matching_containers += 1
-                        print(f"✅ Found {instructor} class at {time} (container #{container_index + 1})")
+                        extra_context = label or ''
+                        context_blurb = f" ({extra_context})" if extra_context else ''
+                        print(f"✅ Found {instructor} class at {time} (container #{original_index}){context_blurb}")
                         print(f"   Container text preview: {container_text[:100]}...")
                         
                         # If this is not the first matching container, log it
