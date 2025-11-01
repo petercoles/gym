@@ -100,3 +100,6 @@ my_schedule.csv
 # Test files
 test_state.json
 test_*.json
+
+# Analysis
+*.ipynb
