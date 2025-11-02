@@ -543,12 +543,7 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             # First try to find a classes link on the current authenticated page
             class_link_selectors = [
                 'a[href="../CCE/ClassCalendar.aspx"]',
-                'a[href*="ClassCalendar"]',
-                'a:has-text("Classes")',
-                'a:has-text("Class Calendar")',
-                'a:has-text("Book Classes")',
                 '*:has-text("Classes")',
-                '*:has-text("Class")'
             ]
             
             navigated = False
@@ -566,27 +561,37 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                     print(f"⚠️  Link not found: {link_selector}")
                     continue
             
-            # If no link found, try direct navigation (but within the same session)
-            if not navigated:
-                print("No classes link found, trying direct navigation...")
-                try:
-                    class_url = "https://online.thehogarth.co.uk/CCE/ClassCalendar.aspx"
-                    print(f"Navigating to: {class_url}")
-                    await page.goto(class_url, timeout=15000)
-                    await page.wait_for_load_state('networkidle', timeout=10000)
-                    print("✅ Direct navigation successful")
-                    navigated = True
-                except Exception as e:
-                    print(f"❌ Direct navigation failed: {e}")
-            
             if not navigated:
                 print("❌ Could not navigate to class calendar page")
                 return False
                 
             print("✅ Successfully reached class calendar page")
             
+            # We book 8 days ahead, so always click through to next week.
+            print("Clicking Next to advance to bookable week...")
+            next_selectors = [
+                'a#ctl00_mainContent_ibNext',
+                '<a:has-text("Next→")',
+            ]
+
+            next_clicked = False
+            for selector in next_selectors:
+                try:
+                    next_button = await page.wait_for_selector(selector, timeout=5000)
+                    if next_button:
+                        print(f"✅ Found Next button: {selector}")
+                        await next_button.click()
+                        await page.wait_for_load_state('networkidle')
+                        next_clicked = True
+                        break
+                except Exception:
+                    continue
+
+            if not next_clicked:
+                print("❌ Could not find Next button to advance to bookable week")
+                return False
+            
             # Prepare selectors for locating the target day
-            day_name = target_date.strftime('%A')  # e.g., "Friday"
             day_header = target_date.strftime('%a %d %b')  # e.g., "Fri 24 Oct"
             day_selectors = [
                 f'*:has-text("{day_header}")',  # Full format first: "Fri 24 Oct"
@@ -596,30 +601,62 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 f'td:has-text("{day_header}")',
                 f'th:has-text("{day_header}")',
                 f'div:has-text("{day_header}")',
-                f'*:has-text("{day_name[:3]}")',  # Fallback "Fri"
-                f'*:has-text("{day_name}")',  # Fallback "Friday"
             ]
             
-            # Step 2: Click "Next" to advance to the bookable week if needed
-            day_section = None
-            for selector in day_selectors:
-                try:
-                    candidate = await page.query_selector(selector)
-                    if candidate:
-                        day_section = candidate
-                        print(f"✅ Target day already visible on current calendar with selector: {selector}")
-                        break
-                except Exception:
-                    continue
-            
+            # Build search tokens for identifying the correct day container (keep list minimal but distinctive)
+            day_tokens = []
+            for token in [
+                day_header,
+                target_date.strftime('%Y-%m-%d'),
+                target_date.strftime('%d %b %Y'),
+                target_date.strftime('%d %B %Y'),
+                target_date.strftime('%d/%m/%Y')
+            ]:
+                if token not in day_tokens:
+                    day_tokens.append(token)
+
+            async def find_day_section():
+                """Locate the wrapper containing the target day's schedule."""
+                # First, look for the standard classWrapper day containers
+                wrappers = await page.query_selector_all('div.classWrapper')
+                for wrapper in wrappers:
+                    matches, label = await self._container_matches_day(wrapper, day_tokens)
+                    if matches:
+                        return wrapper, (label or day_header), 'div.classWrapper'
+
+                # Fall back to the broader selector list in case markup changes slightly
+                for selector in day_selectors:
+                    try:
+                        candidate = await page.query_selector(selector)
+                    except Exception:
+                        continue
+                    if not candidate:
+                        continue
+                    matches, label = await self._container_matches_day(candidate, day_tokens)
+                    if matches:
+                        return candidate, (label or day_header), selector
+                return None, "", ""
+
+            # Step 2: Check if the target day is already visible; otherwise advance the calendar
+            day_section, day_section_label, day_section_source = await find_day_section()
             if not day_section:
+                # Give the calendar a moment to finish rendering before we start advancing weeks
+                for attempt in range(3):
+                    print(f"⏳ Waiting for class calendar to render (attempt {attempt + 1}/3)...")
+                    await page.wait_for_timeout(1000)
+                    day_section, day_section_label, day_section_source = await find_day_section()
+                    if day_section:
+                        break
+
+            if day_section:
+                print(f"✅ Target day visible ({day_section_source}) [{day_section_label}]")
+            else:
                 print("Clicking Next to advance to bookable week...")
                 next_selectors = [
-                    'a#ctl00_mainContent_ucCalendar_lnkNextWeek',
-                    'a:has-text("Next")',
-                    '*:has-text("Next")'
+                    'a#ctl00_mainContent_ibNext',
+                    '<a:has-text("Next→")',
                 ]
-                
+
                 next_clicked = False
                 for selector in next_selectors:
                     try:
@@ -630,31 +667,30 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                             await page.wait_for_load_state('networkidle')
                             next_clicked = True
                             break
-                    except:
+                    except Exception:
                         continue
-                
+
                 if not next_clicked:
                     print("❌ Could not find Next button to advance to bookable week")
                     return False
-            
-            # Step 3: Find target date section
-            print(f"Looking for {target_date.strftime('%A')} section...")
-            if day_section:
-                print(f"➡️  Reusing existing handle for {day_header}")
-            else:
-                print(f"Looking for day section: '{day_header}' (or fallbacks)")
-                for selector in day_selectors:
-                    try:
-                        day_section = await page.wait_for_selector(selector, timeout=3000)
+
+                day_section, day_section_label, day_section_source = await find_day_section()
+                if day_section:
+                    print(f"✅ Target day now visible ({day_section_source}) [{day_section_label}]")
+                else:
+                    for attempt in range(5):
+                        print(f"⏳ Waiting for target day '{day_header}' (attempt {attempt + 1}/5)...")
+                        await page.wait_for_timeout(1000)
+                        day_section, day_section_label, day_section_source = await find_day_section()
                         if day_section:
-                            print(f"✅ Found {day_name} section with: {selector}")
+                            print(f"✅ Target day located after wait ({day_section_source}) [{day_section_label}]")
                             break
-                    except:
-                        continue
-            
+
             if not day_section:
-                print(f"❌ Could not find {day_name} section")
+                print(f"❌ Could not find day_name section (expected header '{day_header}')")
                 return False
+
+            print(f"➡️  Using day section from {day_section_source} [{day_section_label}]")
                 
             # Step 4: Look for class with matching instructor and time
             print(f"Looking for {instructor} at {time}...")
@@ -700,18 +736,6 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             container_contexts = []
             filtered_contexts = []
             skipped_contexts = []
-
-            day_tokens = [
-                day_header,
-                target_date.strftime('%Y-%m-%d'),
-                target_date.strftime('%d %b'),
-                target_date.strftime('%d %B'),
-                target_date.strftime('%d/%m'),
-                target_date.strftime('%m/%d'),
-                day_name,
-                day_name[:3],
-                str(target_date.day)
-            ]
 
             for original_index, container in enumerate(class_containers, 1):
                 matches_day, label = await self._container_matches_day(container, day_tokens)
@@ -1677,26 +1701,6 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                     continue
                 
                 print(f"🎯 Booking due: {entry['user']} - {entry['instructor']} on {target_date.strftime('%A, %Y-%m-%d')} at {entry['time']}")
-                
-                # Check for booking conflicts (especially critical for swim lanes)
-                duplicate_entries = [e for e in schedule if 
-                                   e['instructor'] == entry['instructor'] and 
-                                   e['time'] == entry['time'] and 
-                                   e['day_of_week'] == entry['day_of_week']]
-                
-                if len(duplicate_entries) > 1:
-                    users_for_this_slot = [e['user'] for e in duplicate_entries]
-                    is_swim_conflict = entry['instructor'].startswith('Swim(')
-                    
-                    if is_swim_conflict:
-                        print(f"🏊 Multiple users ({', '.join(users_for_this_slot)}) booking {entry['instructor']} at {entry['time']}")
-                        print(f"✅ Sequential booking should secure adjacent lanes (Lane 2, 3, 4 priority)")
-                    else:
-                        print(f"⚠️  Multiple users ({', '.join(users_for_this_slot)}) scheduled for {entry['instructor']} at {entry['time']}")
-                        if 'Terry' in entry['instructor']:
-                            print(f"✅ Terry class has 15 spots - should be OK if script runs fast")
-                        else:
-                            print(f"⚠️  Limited spots available - first booking will likely succeed")
                 
                 # Determine if this is a swim or class booking
                 is_swim, duration = self._parse_swim_instructor(entry['instructor'])
