@@ -724,14 +724,17 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 day_container_handle = None
 
             day_container = day_container_handle.as_element() if day_container_handle else None
-            scoped_to_day = bool(day_container)
+            scoped_to_day = False
             if day_container:
                 class_containers = await day_container.query_selector_all('div.classDesktopWrapper')
+                if class_containers:
+                    scoped_to_day = True
 
             if not class_containers:
                 # Fallback to global search if we couldn't scope the day section
                 print("⚠️  Could not scope class search to day section, falling back to full page scan")
                 class_containers = await page.query_selector_all('div.classDesktopWrapper')
+                scoped_to_day = False
 
             # Collect metadata to filter class containers down to the requested day
             container_contexts = []
