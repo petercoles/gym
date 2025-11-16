@@ -724,6 +724,7 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 day_container_handle = None
 
             day_container = day_container_handle.as_element() if day_container_handle else None
+            scoped_to_day = bool(day_container)
             if day_container:
                 class_containers = await day_container.query_selector_all('div.classDesktopWrapper')
 
@@ -750,9 +751,12 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 class_contexts = filtered_contexts
                 print(f"✅ Scoped search to {len(filtered_contexts)} class container(s) matching {day_header}")
             else:
-                class_contexts = container_contexts
-                if skipped_contexts:
-                    print("⚠️  Day-level filtering did not match any containers; continuing with unfiltered list")
+                if scoped_to_day and class_containers:
+                    class_contexts = container_contexts
+                    print("⚠️  Could not confirm day label inside class cards, but search remains restricted to located day section")
+                else:
+                    print("❌ Unable to confidently identify any class cards for the requested day; aborting to avoid cross-day booking")
+                    return False
 
             class_booked = False
             matching_containers = 0
