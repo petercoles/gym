@@ -697,43 +697,121 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             
             # Find class containers that have both instructor and time, scoped to the located day section
             class_containers = []
+            day_scope_selectors = [
+                '.classCalendarDay',
+                '.classDayWrapper',
+                '.classWeekDay',
+                '.dayWrap',
+                '.uk-accordion-content',
+                '.uk-panel',
+                '.day-wrapper',
+                '.classDay'
+            ]
             day_container_handle = None
             try:
                 day_container_handle = await day_section.evaluate_handle(
-                    """(node) => {
-                        const scopes = [
-                            '.classCalendarDay',
-                            '.classDayWrapper',
-                            '.classWeekDay',
-                            '.dayWrap',
-                            '.uk-accordion-content',
-                            '.uk-panel',
-                            '.day-wrapper',
-                            '.classDay'
-                        ];
-                        for (const selector of scopes) {
-                            const match = node.closest(selector);
-                            if (match) {
-                                return match;
-                            }
+                    """(node, scopes) => {
+                        if (!node) {
+                            return null;
                         }
+
+                        const matchesScopes = (element) => {
+                            if (!element) {
+                                return false;
+                            }
+                            return (scopes || []).some((selector) => {
+                                try {
+                                    return element.matches(selector);
+                                } catch (e) {
+                                    return false;
+                                }
+                            });
+                        };
+
+                        const findAncestorMatch = (start) => {
+                            let current = start;
+                            while (current) {
+                                if (matchesScopes(current)) {
+                                    return current;
+                                }
+                                current = current.parentElement;
+                            }
+                            return null;
+                        };
+
+                        const findForwardSiblingMatch = (start) => {
+                            let current = start ? start.nextElementSibling : null;
+                            while (current) {
+                                if (matchesScopes(current)) {
+                                    return current;
+                                }
+                                current = current.nextElementSibling;
+                            }
+                            return null;
+                        };
+
+                        const ancestorMatch = findAncestorMatch(node);
+                        if (ancestorMatch) {
+                            return ancestorMatch;
+                        }
+
+                        const directSibling = findForwardSiblingMatch(node);
+                        if (directSibling) {
+                            return directSibling;
+                        }
+
+                        let relative = node.parentElement;
+                        while (relative) {
+                            const relativeAncestor = findAncestorMatch(relative);
+                            if (relativeAncestor) {
+                                return relativeAncestor;
+                            }
+
+                            const relativeSibling = findForwardSiblingMatch(relative);
+                            if (relativeSibling) {
+                                return relativeSibling;
+                            }
+                            relative = relative.parentElement;
+                        }
+
                         return node;
-                    }"""
+                    }""",
+                    day_scope_selectors
                 )
             except Exception:
                 day_container_handle = None
 
             day_container = day_container_handle.as_element() if day_container_handle else None
             scoped_to_day = False
+
+            async def query_class_cards(root_element):
+                if not root_element:
+                    return []
+                try:
+                    return await root_element.query_selector_all('div.classDesktopWrapper')
+                except Exception:
+                    return []
+
             if day_container:
-                class_containers = await day_container.query_selector_all('div.classDesktopWrapper')
+                class_containers = await query_class_cards(day_container)
                 if class_containers:
                     scoped_to_day = True
+                else:
+                    print("⚠️  No class cards attached directly to located day section; looking for nearby wrappers")
+                    try:
+                        parent_candidate = await day_section.evaluate_handle("(node) => node && node.parentElement ? node.parentElement : null")
+                    except Exception:
+                        parent_candidate = None
+                    parent_element = parent_candidate.as_element() if parent_candidate else None
+                    if parent_element:
+                        class_containers = await query_class_cards(parent_element)
+                        if class_containers:
+                            scoped_to_day = True
 
             if not class_containers:
                 # Fallback to global search if we couldn't scope the day section
                 print("⚠️  Could not scope class search to day section, falling back to full page scan")
-                class_containers = await page.query_selector_all('div.classDesktopWrapper')
+                class_containers = await query_class_cards(page)
                 scoped_to_day = False
 
             # Collect metadata to filter class containers down to the requested day
