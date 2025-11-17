@@ -591,257 +591,65 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 print("❌ Could not find Next button to advance to bookable week")
                 return False
             
-            # Prepare selectors for locating the target day
             day_header = target_date.strftime('%a %d %b')  # e.g., "Fri 24 Oct"
-            day_selectors = [
-                f'*:has-text("{day_header}")',  # Full format first: "Fri 24 Oct"
-                f'h2:has-text("{day_header}")',
-                f'h3:has-text("{day_header}")',
-                f'h1:has-text("{day_header}")',
-                f'td:has-text("{day_header}")',
-                f'th:has-text("{day_header}")',
-                f'div:has-text("{day_header}")',
-            ]
-            
-            # Build search tokens for identifying the correct day container (keep list minimal but distinctive)
-            day_tokens = []
-            for token in [
-                day_header,
-                target_date.strftime('%Y-%m-%d'),
-                target_date.strftime('%d %b %Y'),
-                target_date.strftime('%d %B %Y'),
-                target_date.strftime('%d/%m/%Y')
-            ]:
-                if token not in day_tokens:
-                    day_tokens.append(token)
+            calendar_selector = '#classCalendarDesktop'
 
-            async def find_day_section():
-                """Locate the wrapper containing the target day's schedule."""
-                # First, look for the standard classWrapper day containers
-                wrappers = await page.query_selector_all('div.classWrapper')
-                for wrapper in wrappers:
-                    matches, label = await self._container_matches_day(wrapper, day_tokens)
-                    if matches:
-                        return wrapper, (label or day_header), 'div.classWrapper'
-
-                # Fall back to the broader selector list in case markup changes slightly
-                for selector in day_selectors:
-                    try:
-                        candidate = await page.query_selector(selector)
-                    except Exception:
-                        continue
-                    if not candidate:
-                        continue
-                    matches, label = await self._container_matches_day(candidate, day_tokens)
-                    if matches:
-                        return candidate, (label or day_header), selector
-                return None, "", ""
-
-            # Step 2: Check if the target day is already visible; otherwise advance the calendar
-            day_section, day_section_label, day_section_source = await find_day_section()
-            if not day_section:
-                # Give the calendar a moment to finish rendering before we start advancing weeks
-                for attempt in range(3):
-                    print(f"⏳ Waiting for class calendar to render (attempt {attempt + 1}/3)...")
-                    await page.wait_for_timeout(1000)
-                    day_section, day_section_label, day_section_source = await find_day_section()
-                    if day_section:
-                        break
-
-            if day_section:
-                print(f"✅ Target day visible ({day_section_source}) [{day_section_label}]")
-            else:
-                print("Clicking Next to advance to bookable week...")
-                next_selectors = [
-                    'a#ctl00_mainContent_ibNext',
-                    '<a:has-text("Next→")',
-                ]
-
-                next_clicked = False
-                for selector in next_selectors:
-                    try:
-                        next_button = await page.wait_for_selector(selector, timeout=5000)
-                        if next_button:
-                            print(f"✅ Found Next button: {selector}")
-                            await next_button.click()
-                            await page.wait_for_load_state('networkidle')
-                            next_clicked = True
-                            break
-                    except Exception:
-                        continue
-
-                if not next_clicked:
-                    print("❌ Could not find Next button to advance to bookable week")
-                    return False
-
-                day_section, day_section_label, day_section_source = await find_day_section()
-                if day_section:
-                    print(f"✅ Target day now visible ({day_section_source}) [{day_section_label}]")
-                else:
-                    for attempt in range(5):
-                        print(f"⏳ Waiting for target day '{day_header}' (attempt {attempt + 1}/5)...")
-                        await page.wait_for_timeout(1000)
-                        day_section, day_section_label, day_section_source = await find_day_section()
-                        if day_section:
-                            print(f"✅ Target day located after wait ({day_section_source}) [{day_section_label}]")
-                            break
-
-            if not day_section:
-                print(f"❌ Could not find day_name section (expected header '{day_header}')")
+            # Step 2: Locate the day column for the requested date within the visible calendar
+            try:
+                calendar_root = await page.wait_for_selector(calendar_selector, timeout=10000)
+            except Exception:
+                print("❌ Could not locate class calendar on the page")
                 return False
 
-            print(f"➡️  Using day section from {day_section_source} [{day_section_label}]")
+            if not calendar_root:
+                print("❌ Calendar root element not available")
+                return False
+
+            day_wrappers = await calendar_root.query_selector_all('div.classWrapper')
+            if not day_wrappers:
+                print("❌ No day columns found inside the class calendar")
+                return False
+
+            target_wrapper = None
+            matched_label = ""
+            normalized_header = day_header.strip().lower()
+            for wrapper in day_wrappers:
+                try:
+                    header_el = await wrapper.query_selector('.classDateHeader')
+                except Exception:
+                    header_el = None
+                header_text = ""
+                if header_el:
+                    try:
+                        header_text = await header_el.inner_text()
+                    except Exception:
+                        header_text = await header_el.text_content()
+                header_text = (header_text or "").strip()
+                if header_text and normalized_header in header_text.lower():
+                    target_wrapper = wrapper
+                    matched_label = header_text
+                    break
+
+            if not target_wrapper:
+                print(f"❌ Could not find a day column labelled '{day_header}'")
+                return False
+
+            print(f"✅ Located calendar column for {matched_label or day_header}")
                 
+            class_containers = await target_wrapper.query_selector_all('div.classDesktopWrapper')
+            if not class_containers:
+                print(f"❌ No class cards found under {matched_label or day_header}")
+                return False
+
             # Step 4: Look for class with matching instructor and time
             print(f"Looking for {instructor} at {time}...")
-            
-            # Find class containers that have both instructor and time, scoped to the located day section
-            class_containers = []
-            day_scope_selectors = [
-                '.classCalendarDay',
-                '.classDayWrapper',
-                '.classWeekDay',
-                '.dayWrap',
-                '.uk-accordion-content',
-                '.uk-panel',
-                '.day-wrapper',
-                '.classDay'
-            ]
-            day_container_handle = None
-            try:
-                day_container_handle = await day_section.evaluate_handle(
-                    """(node, scopes) => {
-                        if (!node) {
-                            return null;
-                        }
-
-                        const matchesScopes = (element) => {
-                            if (!element) {
-                                return false;
-                            }
-                            return (scopes || []).some((selector) => {
-                                try {
-                                    return element.matches(selector);
-                                } catch (e) {
-                                    return false;
-                                }
-                            });
-                        };
-
-                        const findAncestorMatch = (start) => {
-                            let current = start;
-                            while (current) {
-                                if (matchesScopes(current)) {
-                                    return current;
-                                }
-                                current = current.parentElement;
-                            }
-                            return null;
-                        };
-
-                        const findForwardSiblingMatch = (start) => {
-                            let current = start ? start.nextElementSibling : null;
-                            while (current) {
-                                if (matchesScopes(current)) {
-                                    return current;
-                                }
-                                current = current.nextElementSibling;
-                            }
-                            return null;
-                        };
-
-                        const ancestorMatch = findAncestorMatch(node);
-                        if (ancestorMatch) {
-                            return ancestorMatch;
-                        }
-
-                        const directSibling = findForwardSiblingMatch(node);
-                        if (directSibling) {
-                            return directSibling;
-                        }
-
-                        let relative = node.parentElement;
-                        while (relative) {
-                            const relativeAncestor = findAncestorMatch(relative);
-                            if (relativeAncestor) {
-                                return relativeAncestor;
-                            }
-
-                            const relativeSibling = findForwardSiblingMatch(relative);
-                            if (relativeSibling) {
-                                return relativeSibling;
-                            }
-                            relative = relative.parentElement;
-                        }
-
-                        return node;
-                    }""",
-                    day_scope_selectors
-                )
-            except Exception:
-                day_container_handle = None
-
-            day_container = day_container_handle.as_element() if day_container_handle else None
-            scoped_to_day = False
-
-            async def query_class_cards(root_element):
-                if not root_element:
-                    return []
-                try:
-                    return await root_element.query_selector_all('div.classDesktopWrapper')
-                except Exception:
-                    return []
-
-            if day_container:
-                class_containers = await query_class_cards(day_container)
-                if class_containers:
-                    scoped_to_day = True
-                else:
-                    print("⚠️  No class cards attached directly to located day section; looking for nearby wrappers")
-                    try:
-                        parent_candidate = await day_section.evaluate_handle("(node) => node && node.parentElement ? node.parentElement : null")
-                    except Exception:
-                        parent_candidate = None
-                    parent_element = parent_candidate.as_element() if parent_candidate else None
-                    if parent_element:
-                        class_containers = await query_class_cards(parent_element)
-                        if class_containers:
-                            scoped_to_day = True
-
-            if not class_containers:
-                # Fallback to global search if we couldn't scope the day section
-                print("⚠️  Could not scope class search to day section, falling back to full page scan")
-                class_containers = await query_class_cards(page)
-                scoped_to_day = False
-
-            # Collect metadata to filter class containers down to the requested day
-            container_contexts = []
-            filtered_contexts = []
-            skipped_contexts = []
-
-            for original_index, container in enumerate(class_containers, 1):
-                matches_day, label = await self._container_matches_day(container, day_tokens)
-                context_entry = (original_index, container, label, matches_day)
-                container_contexts.append(context_entry)
-                if matches_day:
-                    filtered_contexts.append(context_entry)
-                else:
-                    skipped_contexts.append(context_entry)
-
-            if filtered_contexts:
-                class_contexts = filtered_contexts
-                print(f"✅ Scoped search to {len(filtered_contexts)} class container(s) matching {day_header}")
-            else:
-                if scoped_to_day and class_containers:
-                    class_contexts = container_contexts
-                    print("⚠️  Could not confirm day label inside class cards, but search remains restricted to located day section")
-                else:
-                    print("❌ Unable to confidently identify any class cards for the requested day; aborting to avoid cross-day booking")
-                    return False
+            normalized_instructor = instructor.strip().lower()
+            normalized_time = time.strip()
+            normalized_time_no_colon = normalized_time.replace(':', '')
 
             class_booked = False
             matching_containers = 0
-            for original_index, container, label, _ in class_contexts:
+            for original_index, container in enumerate(class_containers, 1):
                 try:
                     # Get all text content from this class container
                     container_text = await container.text_content()
@@ -849,14 +657,17 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                         continue
                     
                     # Check if this container has both the instructor and time
-                    has_instructor = instructor in container_text
-                    has_time = time in container_text or time.replace(':', '') in container_text
+                    lowered_container = container_text.lower()
+                    has_instructor = normalized_instructor in lowered_container if normalized_instructor else True
+                    condensed_container = container_text.replace(':', '')
+                    has_time = (
+                        normalized_time in container_text or
+                        (normalized_time_no_colon and normalized_time_no_colon in condensed_container)
+                    )
                     
                     if has_instructor and has_time:
                         matching_containers += 1
-                        extra_context = label or ''
-                        context_blurb = f" ({extra_context})" if extra_context else ''
-                        print(f"✅ Found {instructor} class at {time} (container #{original_index}){context_blurb}")
+                        print(f"✅ Found {instructor} class at {time} (container #{original_index})")
                         print(f"   Container text preview: {container_text[:100]}...")
                         
                         # If this is not the first matching container, log it
@@ -898,67 +709,50 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                         
                         # Wait for overlay to fully load and DOM to stabilize
                         print("⏳ Waiting for overlay to load completely...")
-                        await page.wait_for_timeout(2000)  # Wait longer for DOM changes
+                        await page.wait_for_timeout(1500)
                         
                         # Now look for the booking button within this specific class container
-                        # Re-find the container since DOM may have changed after clicking
-                        updated_containers = await page.query_selector_all('div.classDesktopWrapper')
-                        
-                        for updated_container in updated_containers:
+                        booking_button = None
+                        try:
+                            booking_button = await container.wait_for_selector(
+                                'a.bookClassButton',
+                                state='visible',
+                                timeout=5000
+                            )
+                        except Exception:
+                            booking_button = await container.query_selector('a.bookClassButton')
+
+                        if booking_button:
                             try:
-                                # Check if this is still our class
-                                container_text = await updated_container.text_content()
-                                if container_text and instructor in container_text and time in container_text:
-                                    print(f"✅ Found updated container for {instructor} at {time}")
-                                    
-                                    # Look for booking button within this specific container
-                                    booking_button = None
-                                    try:
-                                        booking_button = await updated_container.wait_for_selector(
-                                            'a.bookClassButton',
-                                            state='visible',
-                                            timeout=5000
-                                        )
-                                    except Exception:
-                                        booking_button = await updated_container.query_selector('a.bookClassButton')
+                                await booking_button.scroll_into_view_if_needed()
+                            except Exception:
+                                pass
 
-                                    if booking_button:
-                                        try:
-                                            await booking_button.scroll_into_view_if_needed()
-                                        except Exception:
-                                            pass
+                            button_text = await booking_button.text_content()
 
-                                        button_text = await booking_button.text_content()
-                                        display_text = button_text.strip() if button_text else "Unknown"
-
-                                        
-                                        # Check what type of button it is
-                                        if button_text:
-                                            button_lower = button_text.lower()
-                                            if "waiting" in button_lower:
-                                                print(f"❌ Class is full - only waiting list available")
-                                                return False
-                                            elif "full" in button_lower:
-                                                print(f"❌ Class is full")
-                                                return False
-                                            elif "book" in button_lower:
-                                                is_visible = await booking_button.is_visible()
-                                                if is_visible:
-                                                    print(f"✅ Clicking booking button for {instructor} class")
-                                                    await booking_button.click()
-                                                    await page.wait_for_load_state('networkidle')
-                                                    class_booked = True
-                                                    break
-                                                else:
-                                                    print(f"⚠️  Booking button not visible")
-                                            else:
-                                                print(f"⚠️  Unknown button type: '{button_text.strip()}'")
+                            # Check what type of button it is
+                            if button_text:
+                                button_lower = button_text.lower()
+                                if "waiting" in button_lower:
+                                    print(f"❌ Class is full - only waiting list available")
+                                    return False
+                                elif "full" in button_lower:
+                                    print(f"❌ Class is full")
+                                    return False
+                                elif "book" in button_lower:
+                                    is_visible = await booking_button.is_visible()
+                                    if is_visible:
+                                        print(f"✅ Clicking booking button for {instructor} class")
+                                        await booking_button.click()
+                                        await page.wait_for_load_state('networkidle')
+                                        class_booked = True
+                                        break
                                     else:
-                                        print(f"❌ No booking button found in {instructor} class container")
-                                    break
-                            except Exception as e:
-                                print(f"⚠️  Error checking container: {e}")
-                                continue
+                                        print(f"⚠️  Booking button not visible")
+                                else:
+                                    print(f"⚠️  Unknown button type: '{button_text.strip()}'")
+                        else:
+                            print(f"❌ No booking button found in {instructor} class container")
                         
                         if class_booked:
                             break
