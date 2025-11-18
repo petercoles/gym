@@ -21,8 +21,8 @@ from playwright.async_api import async_playwright, Page
 # Load environment variables
 load_dotenv()
 
-# Ensure Playwright finds browsers in Render environment  
-if not os.getenv('PLAYWRIGHT_BROWSERS_PATH'):
+# Ensure Playwright finds browsers in Render environment only when needed
+if not os.getenv('PLAYWRIGHT_BROWSERS_PATH') and os.getenv('RENDER'):
     os.environ['PLAYWRIGHT_BROWSERS_PATH'] = '/opt/render/project/.playwright-browsers'
 
 class GymBookingBot:
@@ -195,6 +195,94 @@ class GymBookingBot:
         matches = bool(result.get('match'))
         label = (result.get('label') or "").strip()
         return matches, label
+
+    async def _locate_matching_classes(self, calendar_root, day_header: str, instructor: str, time: str) -> tuple[list[dict], str]:
+        """Find calendar containers that match the requested day/instructor/time."""
+        if not calendar_root:
+            print("❌ Calendar root element not available")
+            return [], ""
+
+        try:
+            day_wrappers = await calendar_root.query_selector_all('div.classWrapper')
+        except Exception:
+            day_wrappers = []
+
+        if not day_wrappers:
+            print("❌ No day columns found inside the class calendar")
+            return [], ""
+
+        target_wrapper = None
+        matched_label = ""
+        normalized_header = (day_header or "").strip().lower()
+
+        for wrapper in day_wrappers:
+            try:
+                header_el = await wrapper.query_selector('.classDateHeader')
+            except Exception:
+                header_el = None
+
+            header_text = ""
+            if header_el:
+                try:
+                    header_text = await header_el.inner_text()
+                except Exception:
+                    header_text = await header_el.text_content()
+
+            header_text = (header_text or "").strip()
+            if header_text and normalized_header in header_text.lower():
+                target_wrapper = wrapper
+                matched_label = header_text
+                break
+
+        if not target_wrapper:
+            print(f"❌ Could not find a day column labelled '{day_header}'")
+            return [], ""
+
+        print(f"✅ Located calendar column for {matched_label or day_header}")
+
+        try:
+            class_containers = await target_wrapper.query_selector_all('div.classDesktopWrapper')
+        except Exception:
+            class_containers = []
+
+        if not class_containers:
+            print(f"❌ No class cards found under {matched_label or day_header}")
+            return [], matched_label or day_header
+
+        print(f"Looking for {instructor} at {time}...")
+        normalized_instructor = instructor.strip().lower()
+        normalized_time = time.strip()
+        normalized_time_no_colon = normalized_time.replace(':', '')
+
+        matches: list[dict] = []
+        for original_index, container in enumerate(class_containers, 1):
+            try:
+                container_text = await container.text_content()
+            except Exception as e:
+                print(f"⚠️  Error checking container #{original_index}: {e}")
+                continue
+
+            if not container_text:
+                continue
+
+            lowered_container = container_text.lower()
+            has_instructor = normalized_instructor in lowered_container if normalized_instructor else True
+            condensed_container = container_text.replace(':', '')
+            has_time = (
+                normalized_time in container_text or
+                (normalized_time_no_colon and normalized_time_no_colon in condensed_container)
+            )
+
+            if has_instructor and has_time:
+                matches.append(
+                    {
+                        'container': container,
+                        'index': original_index,
+                        'text': container_text.strip(),
+                    }
+                )
+
+        return matches, matched_label or day_header
 
     async def _get_datepicker_title(self, calendar) -> str:
         """Extract the month/year title text from the datepicker."""
@@ -605,161 +693,133 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 print("❌ Calendar root element not available")
                 return False
 
-            day_wrappers = await calendar_root.query_selector_all('div.classWrapper')
-            if not day_wrappers:
-                print("❌ No day columns found inside the class calendar")
+            matching_classes, matched_label = await self._locate_matching_classes(
+                calendar_root=calendar_root,
+                day_header=day_header,
+                instructor=instructor,
+                time=time,
+            )
+
+            if not matching_classes:
+                print(f"❌ Could not find bookable {instructor} class at {time}")
                 return False
-
-            target_wrapper = None
-            matched_label = ""
-            normalized_header = day_header.strip().lower()
-            for wrapper in day_wrappers:
-                try:
-                    header_el = await wrapper.query_selector('.classDateHeader')
-                except Exception:
-                    header_el = None
-                header_text = ""
-                if header_el:
-                    try:
-                        header_text = await header_el.inner_text()
-                    except Exception:
-                        header_text = await header_el.text_content()
-                header_text = (header_text or "").strip()
-                if header_text and normalized_header in header_text.lower():
-                    target_wrapper = wrapper
-                    matched_label = header_text
-                    break
-
-            if not target_wrapper:
-                print(f"❌ Could not find a day column labelled '{day_header}'")
-                return False
-
-            print(f"✅ Located calendar column for {matched_label or day_header}")
-                
-            class_containers = await target_wrapper.query_selector_all('div.classDesktopWrapper')
-            if not class_containers:
-                print(f"❌ No class cards found under {matched_label or day_header}")
-                return False
-
-            # Step 4: Look for class with matching instructor and time
-            print(f"Looking for {instructor} at {time}...")
-            normalized_instructor = instructor.strip().lower()
-            normalized_time = time.strip()
-            normalized_time_no_colon = normalized_time.replace(':', '')
 
             class_booked = False
-            matching_containers = 0
-            for original_index, container in enumerate(class_containers, 1):
+            total_matches = len(matching_classes)
+            for match_position, match in enumerate(matching_classes, 1):
+                container = match['container']
+                original_index = match['index']
+                container_text = match.get('text', '')
+
+                print(f"✅ Found {instructor} class at {time} (container #{original_index})")
+                if container_text:
+                    preview = container_text.replace('\n', ' ')[:100]
+                    print(f"   Container text preview: {preview}...")
+
+                if total_matches > 1:
+                    print(f"⚠️  Multiple matching classes found! This is match #{match_position} of {total_matches}")
+                    print("   You may need to be more specific in your schedule (e.g., add level/type)")
+
                 try:
-                    # Get all text content from this class container
-                    container_text = await container.text_content()
-                    if not container_text:
+                    # First, we need to make the overlay visible by clicking on the main class card
+                    # The booking button is in the overlay which is hidden by default
+                    try:
+                        # Try to click on the main class card to trigger the overlay
+                        class_card_selectors = [
+                            'div.classSelectFire',
+                            'div.uk-panel-box',
+                            'div.className'
+                        ]
+                        
+                        card_clicked = False
+                        for card_selector in class_card_selectors:
+                            try:
+                                class_card = await container.query_selector(card_selector)
+                                if class_card:
+                                    print(f"✅ Clicking class card: {card_selector}")
+                                    await class_card.click()
+                                    card_clicked = True
+                                    break
+                            except Exception as e:
+                                print(f"⚠️  Failed to click class card {card_selector}: {e}")
+                                continue
+                        
+                        if not card_clicked:
+                            # Try direct click on the container as fallback
+                            try:
+                                print("⚠️  Clicking entire container as fallback...")
+                                await container.click()
+                                card_clicked = True
+                            except Exception as e:
+                                print(f"⚠️  Failed to click class container: {e}")
+                                continue
+                        
+                        # Wait for overlay to be visible after clicking
+                        try:
+                            await page.wait_for_timeout(500)
+                        except Exception:
+                            pass
+                        
+                        # Ensure overlay's close button is visible as confirmation
+                        try:
+                            await container.wait_for_selector('.classOverlay .closeClass', timeout=2000)
+                        except Exception:
+                            print("⚠️  Overlay close button not detected")
+                            continue
+                            
+                    except Exception as e:
+                        print(f"⚠️  Error opening class overlay: {e}")
                         continue
                     
-                    # Check if this container has both the instructor and time
-                    lowered_container = container_text.lower()
-                    has_instructor = normalized_instructor in lowered_container if normalized_instructor else True
-                    condensed_container = container_text.replace(':', '')
-                    has_time = (
-                        normalized_time in container_text or
-                        (normalized_time_no_colon and normalized_time_no_colon in condensed_container)
-                    )
+                    # Wait for overlay to fully load and DOM to stabilize
+                    print("⏳ Waiting for overlay to load completely...")
+                    await page.wait_for_timeout(1500)
                     
-                    if has_instructor and has_time:
-                        matching_containers += 1
-                        print(f"✅ Found {instructor} class at {time} (container #{original_index})")
-                        print(f"   Container text preview: {container_text[:100]}...")
-                        
-                        # If this is not the first matching container, log it
-                        if matching_containers > 1:
-                            print(f"⚠️  Multiple matching classes found! This is container #{matching_containers}")
-                            print(f"   You may need to be more specific in your schedule (e.g., add level/type)")
-                        
-                        # First, we need to make the overlay visible by clicking on the main class card
-                        # The booking button is in the overlay which is hidden by default
+                    # Now look for the booking button within this specific class container
+                    booking_button = None
+                    try:
+                        booking_button = await container.wait_for_selector(
+                            'a.bookClassButton',
+                            state='visible',
+                            timeout=5000
+                        )
+                    except Exception:
+                        booking_button = await container.query_selector('a.bookClassButton')
+
+                    if booking_button:
                         try:
-                            # Try to click on the main class card to trigger the overlay
-                            class_card_selectors = [
-                                'div.classSelectFire',
-                                'div.uk-panel-box',
-                                'div.className'
-                            ]
-                            
-                            card_clicked = False
-                            for card_selector in class_card_selectors:
-                                try:
-                                    class_card = await container.query_selector(card_selector)
-                                    if class_card:
-                                        print(f"✅ Clicking class card: {card_selector}")
-                                        await class_card.click()
-                                        await page.wait_for_timeout(1000)  # Wait for overlay animation
-                                        card_clicked = True
-                                        break
-                                except Exception as e:
-                                    print(f"⚠️  Failed to click class card {card_selector}: {e}")
-                                    continue
-                            
-                            if not card_clicked:
-                                print("❌ Could not click class card to open overlay")
-                                continue
-                                
-                        except Exception as e:
-                            print(f"⚠️  Error opening class overlay: {e}")
-                            continue
-                        
-                        # Wait for overlay to fully load and DOM to stabilize
-                        print("⏳ Waiting for overlay to load completely...")
-                        await page.wait_for_timeout(1500)
-                        
-                        # Now look for the booking button within this specific class container
-                        booking_button = None
-                        try:
-                            booking_button = await container.wait_for_selector(
-                                'a.bookClassButton',
-                                state='visible',
-                                timeout=5000
-                            )
+                            await booking_button.scroll_into_view_if_needed()
                         except Exception:
-                            booking_button = await container.query_selector('a.bookClassButton')
+                            pass
 
-                        if booking_button:
-                            try:
-                                await booking_button.scroll_into_view_if_needed()
-                            except Exception:
-                                pass
+                        button_text = await booking_button.text_content()
 
-                            button_text = await booking_button.text_content()
-
-                            # Check what type of button it is
-                            if button_text:
-                                button_lower = button_text.lower()
-                                if "waiting" in button_lower:
-                                    print(f"❌ Class is full - only waiting list available")
-                                    return False
-                                elif "full" in button_lower:
-                                    print(f"❌ Class is full")
-                                    return False
-                                elif "book" in button_lower:
-                                    is_visible = await booking_button.is_visible()
-                                    if is_visible:
-                                        print(f"✅ Clicking booking button for {instructor} class")
-                                        await booking_button.click()
-                                        await page.wait_for_load_state('networkidle')
-                                        class_booked = True
-                                        break
-                                    else:
-                                        print(f"⚠️  Booking button not visible")
+                        # Check what type of button it is
+                        if button_text:
+                            button_lower = button_text.lower()
+                            if "waiting" in button_lower:
+                                print(f"❌ Class is full - only waiting list available")
+                                return False
+                            elif "full" in button_lower:
+                                print(f"❌ Class is full")
+                                return False
+                            elif "book" in button_lower:
+                                is_visible = await booking_button.is_visible()
+                                if is_visible:
+                                    print(f"✅ Clicking booking button for {instructor} class")
+                                    await booking_button.click()
+                                    await page.wait_for_load_state('networkidle')
+                                    class_booked = True
+                                    break
                                 else:
-                                    print(f"⚠️  Unknown button type: '{button_text.strip()}'")
-                        else:
-                            print(f"❌ No booking button found in {instructor} class container")
-                        
-                        if class_booked:
-                            break
+                                    print(f"⚠️  Booking button not visible")
+                            else:
+                                print(f"⚠️  Unknown button type: '{button_text.strip()}'")
                     else:
-                        # Class doesn't match - continue searching
-                        pass
-                            
+                        print(f"❌ No booking button found in {instructor} class container")
+                    
+                    if class_booked:
+                        break
                 except Exception as e:
                     print(f"⚠️  Error checking container: {e}")
                     continue
