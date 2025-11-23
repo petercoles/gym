@@ -14,6 +14,7 @@ import pytz
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.application import MIMEApplication
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from playwright.async_api import async_playwright, Page
@@ -41,6 +42,7 @@ class GymBookingBot:
         self.username: str = username
         self.password: str = password
         self.headless = os.getenv('HEADLESS', 'false').lower() == 'true'
+        self.last_failure_screenshot: str | None = None
 
     def _detect_browser_environment(self):
         """Detect if running locally and find available browser"""
@@ -112,89 +114,6 @@ class GymBookingBot:
             await page.wait_for_timeout(400)
 
         return False
-
-    async def _container_matches_day(self, container, target_texts: list[str]) -> tuple[bool, str]:
-        """Check whether a class container belongs to the requested day using lightweight DOM inspection."""
-        if not container:
-            return False, ""
-
-        script = """(node, targets) => {
-            const response = { match: false, label: '' };
-            if (!node) {
-                return response;
-            }
-
-            const dayWrapper = node.closest('.classCalendarDay, .classDayWrapper, .classWeekDay, .dayWrap, .uk-accordion-content, .uk-panel, .day-wrapper, .classDay');
-            const labelSelectors = [
-                '.classDayTitle',
-                '.classDayHeader',
-                '.classDayName',
-                '.dayTitle',
-                '.uk-accordion-title',
-                'header',
-                'h1',
-                'h2',
-                'h3'
-            ];
-            const attrCandidates = [
-                'data-date',
-                'data-day',
-                'data-classdate',
-                'data-class-date',
-                'data-class-date-iso'
-            ];
-
-            const wrapper = dayWrapper || node;
-            let label = '';
-
-            for (const selector of labelSelectors) {
-                const headerEl = wrapper.querySelector(selector);
-                if (headerEl && headerEl.textContent) {
-                    label = headerEl.textContent;
-                    break;
-                }
-            }
-
-            if (!label) {
-                for (const attr of attrCandidates) {
-                    const value = wrapper.getAttribute(attr) || node.getAttribute(attr);
-                    if (value) {
-                        label = value;
-                        break;
-                    }
-                }
-            }
-
-            if (!label && wrapper.textContent) {
-                label = wrapper.textContent;
-            }
-
-            const normalizedLabel = (label || '').replace(/\\s+/g, ' ').trim().toLowerCase();
-
-            for (const target of targets || []) {
-                const normalizedTarget = String(target || '').replace(/\\s+/g, ' ').trim().toLowerCase();
-                if (normalizedTarget && normalizedLabel.includes(normalizedTarget)) {
-                    response.match = true;
-                    response.label = label ? label.trim() : '';
-                    return response;
-                }
-            }
-
-            response.label = label ? label.trim() : '';
-            return response;
-        }"""
-
-        try:
-            result = await container.evaluate(script, target_texts)
-        except Exception:
-            return False, ""
-
-        if not isinstance(result, dict):
-            return False, ""
-
-        matches = bool(result.get('match'))
-        label = (result.get('label') or "").strip()
-        return matches, label
 
     async def _locate_matching_classes(self, calendar_root, day_header: str, instructor: str, time: str) -> tuple[list[dict], str]:
         """Find calendar containers that match the requested day/instructor/time."""
@@ -445,7 +364,7 @@ class GymBookingBot:
                 except Exception:
                     return ""
 
-    def _send_booking_failure_email(self, booking_details: dict, failure_reason: str, error_details: str = ""):
+    def _send_booking_failure_email(self, booking_details: dict, failure_reason: str, error_details: str = "", attachments: list[str] | None = None):
         """Send email notification when a booking fails"""
         try:
             # Get email configuration from environment variables
@@ -496,6 +415,16 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             """.strip()
             
             msg.attach(MIMEText(body, 'plain'))
+            # Attach any files (e.g., screenshots)
+            for attachment_path in attachments or []:
+                try:
+                    with open(attachment_path, 'rb') as file:
+                        part = MIMEApplication(file.read(), Name=os.path.basename(attachment_path))
+                        part['Content-Disposition'] = f'attachment; filename="{os.path.basename(attachment_path)}"'
+                        msg.attach(part)
+                    print(f"📎 Attached screenshot: {attachment_path}")
+                except Exception as attach_err:
+                    print(f"⚠️  Could not attach file '{attachment_path}': {attach_err}")
             
             # Send email
             server = smtplib.SMTP(smtp_server, smtp_port)
@@ -948,6 +877,7 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             True if booking successful, False otherwise
         """
         try:
+            self.last_failure_screenshot = None
             # Infer the general time period from the specific time
             time_period = self._infer_time_period(time)
             print(f"Booking swim lane for {target_date.strftime('%Y-%m-%d')} - {duration} minutes - {time} ({time_period})")
@@ -1304,6 +1234,18 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             
             if not slot_booked:
                 print(f"❌ Could not find {time} slot in any lane")
+                # Capture screenshot for diagnostics
+                try:
+                    screenshot_dir = os.path.join(os.getcwd(), "screenshots")
+                    os.makedirs(screenshot_dir, exist_ok=True)
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    filename = f"swim_no_slot_{timestamp}.png"
+                    screenshot_path = os.path.join(screenshot_dir, filename)
+                    await page.screenshot(path=screenshot_path, full_page=True)
+                    self.last_failure_screenshot = screenshot_path
+                    print(f"📷 Saved failure screenshot to {screenshot_path}")
+                except Exception as shot_err:
+                    print(f"⚠️  Could not capture screenshot: {shot_err}")
                 return False
             
             # Step 5: Click "Next" button after selecting time slot
@@ -1688,6 +1630,7 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                         if is_swim:
                             # Make swim booking
                             success = await user_bot.book_swim_lane(page, target_date, duration, entry['time'])
+                            screenshot_attachment = [user_bot.last_failure_screenshot] if getattr(user_bot, "last_failure_screenshot", None) else None
                             if success:
                                 print(f"🏊 Swim booking successful: {entry['user']} - {duration}min at {entry['time']}")
                                 bookings_made += 1
@@ -1704,7 +1647,8 @@ Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                                         'duration': duration
                                     },
                                     "Swim Lane Booking Failed",
-                                    "Could not secure swim lane - may be fully booked or page loading issues"
+                                    "Could not secure swim lane - may be fully booked or page loading issues",
+                                    attachments=screenshot_attachment
                                 )
                         else:
                             # Make class booking
